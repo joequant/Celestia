@@ -11,6 +11,7 @@
 #define _CELUTIL_UTF8_
 
 #include <string>
+#include <tinyutf8.h>
 #include <wchar.h>
 
 #define UTF8_DEGREE_SIGN         "\302\260"
@@ -25,6 +26,8 @@ bool UTF8Decode(const char* str, int pos, int length, wchar_t& ch);
 int UTF8Encode(wchar_t ch, char* s);
 int UTF8StringCompare(const std::string& s0, const std::string& s1);
 int UTF8StringCompare(const std::string& s0, const std::string& s1, size_t n);
+
+bool isSubstring(const utf8_string&, const utf8_string&);
 
 class UTF8StringOrderingPredicate
 {
@@ -116,7 +119,8 @@ class Greek
     static const std::string& canonicalAbbreviation(const std::string&);
 
  public:
-    static Greek* instance;
+    static Greek* m_instance;
+    static Greek *instance();
     int nLetters;
     std::string* names;
     std::string* abbrevs;

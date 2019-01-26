@@ -7,6 +7,7 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
+#include <iostream>
 #include "utf8.h"
 #include <cctype>
 #include <cstring>
@@ -697,7 +698,7 @@ static std::string noAbbrev;
 
 // Greek alphabet crud . . . should probably moved to it's own module.
 
-Greek* Greek::instance = nullptr;
+Greek* Greek::m_instance = nullptr;
 
 Greek::Greek()
 {
@@ -718,32 +719,36 @@ Greek::~Greek()
     delete[] abbrevs;
 }
 
+Greek* Greek::instance()
+{
+    if (m_instance == nullptr)
+        m_instance = new Greek();
+    return m_instance;
+}
+
 const std::string& Greek::canonicalAbbreviation(const std::string& letter)
 {
-    if (instance == nullptr)
-        instance = new Greek();
-
     int i;
-    for (i = 0; i < Greek::instance->nLetters; i++)
+    for (i = 0; i < Greek::instance()->nLetters; i++)
     {
-        if (compareIgnoringCase(letter, instance->names[i]) == 0)
-            return instance->abbrevs[i];
+        if (compareIgnoringCase(letter, instance()->names[i]) == 0)
+            return instance()->abbrevs[i];
     }
 
-    for (i = 0; i < Greek::instance->nLetters; i++)
+    for (i = 0; i < Greek::instance()->nLetters; i++)
     {
-        if (compareIgnoringCase(letter, instance->abbrevs[i]) == 0)
-            return instance->abbrevs[i];
+        if (compareIgnoringCase(letter, instance()->abbrevs[i]) == 0)
+            return instance()->abbrevs[i];
     }
 
     if (letter.length() == 2)
     {
-        for (i = 0; i < Greek::instance->nLetters; i++)
+        for (i = 0; i < Greek::instance()->nLetters; i++)
         {
             if (letter[0] == greekAlphabetUTF8[i][0] &&
                 letter[1] == greekAlphabetUTF8[i][1])
             {
-                return instance->abbrevs[i];
+                return instance()->abbrevs[i];
             }
         }
     }
@@ -759,13 +764,16 @@ std::string ReplaceGreekLetterAbbr(const std::string& str)
 {
     std::string ret = str;
 
+    if (UTF8Length(ret) < 2)
+        return ret;
+
     if (str[0] >= 'A' && str[0] <= 'Z' &&
         str[1] >= 'A' && str[1] <= 'Z')
     {
         // Linear search through all letter abbreviations
-        for (int i = 0; i < Greek::instance->nLetters; i++)
+        for (int i = 0; i < Greek::instance()->nLetters; i++)
         {
-            const std::string& abbr = Greek::instance->abbrevs[i];
+            const std::string& abbr = Greek::instance()->abbrevs[i];
             if (str.compare(0, abbr.length(), abbr) == 0 &&
                 (str[abbr.length()] == ' ' || isdigit(str[abbr.length()])))
             {
@@ -812,7 +820,7 @@ ReplaceGreekLetterAbbr(char *dst, unsigned int dstSize, const char* src, unsigne
         src[1] >= 'A' && src[1] <= 'Z')
     {
         // Linear search through all letter abbreviations
-        for (unsigned int i = 0; i < (unsigned int) Greek::instance->nLetters; i++)
+        for (unsigned int i = 0; i < (unsigned int) Greek::instance()->nLetters; i++)
         {
             const char* abbr = canonicalAbbrevs[i];
             unsigned int j = 0;
@@ -889,4 +897,18 @@ ReplaceGreekLetterAbbr(char *dst, unsigned int dstSize, const char* src, unsigne
     }
 
     return 0;
+}
+
+bool isSubstring(const utf8_string &s1, const utf8_string& s2)
+{
+    utf8_string::const_iterator it1 = s1.cbegin();
+    utf8_string::const_iterator it2 = s2.cbegin();
+    while(it2 != s2.cend())
+    {
+        if (it1 == s1.cend() || *it1 != *it2)
+            return false;
+        it1++;
+        it2++;
+    }
+    return true;
 }
