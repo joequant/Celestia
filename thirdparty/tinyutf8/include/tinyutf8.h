@@ -91,7 +91,7 @@ class utf8_string
 public:
 	
 	typedef std::size_t					size_type;
-	typedef std::ptrdiff_t				difference_type;
+	typedef int				difference_type;
 	typedef char32_t					value_type;
 	typedef value_type					const_reference;
 	typedef std::uint_fast8_t			width_type; // Data type capable of holding the number of code units in a code point

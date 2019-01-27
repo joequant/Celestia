@@ -10,6 +10,7 @@
 #ifndef _CELUTIL_UTF8_
 #define _CELUTIL_UTF8_
 
+#include <vector>
 #include <string>
 #include <tinyutf8.h>
 #include <wchar.h>
@@ -27,7 +28,7 @@ int UTF8Encode(wchar_t ch, char* s);
 int UTF8StringCompare(const std::string& s0, const std::string& s1);
 int UTF8StringCompare(const std::string& s0, const std::string& s1, size_t n);
 
-bool isSubstring(const utf8_string&, const utf8_string&);
+bool isSubstring(const utf8_string&, const utf8_string&, bool ignoreCase = false);
 
 class UTF8StringOrderingPredicate
 {
@@ -81,6 +82,10 @@ inline int UTF8EncodedSizeFromFirstByte(unsigned int ch)
 
 std::string ReplaceGreekLetterAbbr(const std::string&);
 unsigned int ReplaceGreekLetterAbbr(char* dst, unsigned int dstSize, const char* src, unsigned int srcLength);
+
+int findGreekNameIndexBySubstr(const std::string &, int = 0, uint = 0xffffffff);
+std::string firstGreekAbbrCompletion(const std::string &);
+std::vector<std::string> getGreekCompletion(const std::string &);
 
 class Greek
 {
