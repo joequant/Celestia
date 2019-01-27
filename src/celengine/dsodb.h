@@ -40,7 +40,7 @@ class DSODatabase
     DeepSkyObject* find(const uint32_t catalogNumber) const;
     DeepSkyObject* find(const std::string&) const;
 
-    std::vector<std::string> getCompletion(const std::string&) const;
+    completion_t getCompletion(const std::string&) const;
 
     void findVisibleDSOs(DSOHandler& dsoHandler,
                          const Eigen::Vector3d& obsPosition,

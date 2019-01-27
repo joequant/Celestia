@@ -18,6 +18,7 @@
 #include <celephem/rotation.h>
 #include <celephem/orbit.h>
 #include <celutil/utf8.h>
+#include "name.h"
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <string>
@@ -62,7 +63,7 @@ class PlanetarySystem
 
     bool traverse(TraversalFunc, void*) const;
     Body* find(const std::string&, bool deepSearch = false, bool i18n = false) const;
-    std::vector<std::string> getCompletion(const std::string& _name, bool rec = true) const;
+    completion_t getCompletion(const std::string& _name, bool rec = true) const;
 
  private:
     void addBodyToNameIndex(Body* body);

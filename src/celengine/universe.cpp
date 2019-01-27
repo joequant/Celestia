@@ -1074,12 +1074,12 @@ Selection Universe::findPath(const string& s,
 }
 
 
-vector<string> Universe::getCompletion(const string& s,
+completion_t Universe::getCompletion(const string& s,
                                                  Selection* contexts,
                                                  int nContexts,
                                                  bool withLocations)
 {
-    vector<string> completion;
+    completion_t completion;
     int s_length = UTF8Length(s);
 
     // Solar bodies first:
@@ -1104,7 +1104,7 @@ vector<string> Universe::getCompletion(const string& s,
             PlanetarySystem* planets = sys->getPlanets();
             if (planets != nullptr)
             {
-                vector<string> bodies = planets->getCompletion(s);
+                completion_t bodies = planets->getCompletion(s);
                 completion.insert(completion.end(),
                                   bodies.begin(), bodies.end());
             }
@@ -1114,14 +1114,14 @@ vector<string> Universe::getCompletion(const string& s,
     // Deep sky objects:
     if (dsoCatalog != nullptr)
     {
-        vector<string> dsos  = dsoCatalog->getCompletion(s);
+        completion_t dsos  = dsoCatalog->getCompletion(s);
         completion.insert(completion.end(), dsos.begin(), dsos.end());
     }
 
     // and finally stars;
     if (starCatalog != nullptr)
     {
-        vector<string> stars  = starCatalog->getCompletion(s);
+        completion_t stars  = starCatalog->getCompletion(s);
         completion.insert(completion.end(), stars.begin(), stars.end());
     }
 
@@ -1129,13 +1129,13 @@ vector<string> Universe::getCompletion(const string& s,
 }
 
 
-vector<string> Universe::getCompletionPath(const string& s,
+completion_t Universe::getCompletionPath(const string& s,
                                            Selection* contexts,
                                            int nContexts,
                                            bool withLocations)
 {
-    vector<string> completion;
-    vector<string> locationCompletion;
+    completion_t completion;
+    completion_t locationCompletion;
     string::size_type pos = s.rfind('/', s.length());
 
     if (pos == string::npos)

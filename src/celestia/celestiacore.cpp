@@ -1150,7 +1150,7 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
 #endif
         {
             typedText += string(c_p);
-            typedTextCompletion = sim->getObjectCompletion(typedText, (renderer->getLabelMode() & Renderer::LocationLabels) != 0);
+            typedTextCompletion = sim->getObjectCompletion(typedText.cpp_str(), (renderer->getLabelMode() & Renderer::LocationLabels) != 0);
             typedTextCompletionIdx = -1;
 #ifdef AUTO_COMPLETION
             if (typedTextCompletion.size() == 1)
@@ -1175,13 +1175,13 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
                     // We remove bytes like b10xxx xxxx at the end of typeText
                     // these are guarantied to not be the first byte of a UTF-8 char
                     while (typedText.size() && ((typedText[typedText.size() - 1] & 0xC0) == 0x80)) {
-                        typedText = string(typedText, 0, typedText.size() - 1);
+                        typedText = utf8_string(typedText, 0, typedText.size() - 1);
                     }
                     // We then remove the first byte of the last UTF-8 char of typedText.
-                    typedText = string(typedText, 0, typedText.size() - 1);
+                    typedText = utf8_string(typedText, 0, typedText.size() - 1);
                     if (typedText.size() > 0)
                     {
-                        typedTextCompletion = sim->getObjectCompletion(typedText, (renderer->getLabelMode() & Renderer::LocationLabels) != 0);
+                        typedTextCompletion = sim->getObjectCompletion(typedText.cpp_str(), (renderer->getLabelMode() & Renderer::LocationLabels) != 0);
                     } else {
                         typedTextCompletion.clear();
                     }
@@ -1228,7 +1228,7 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
         {
             if (typedText != "")
             {
-                Selection sel = sim->findObjectFromPath(typedText, true);
+                Selection sel = sim->findObjectFromPath(typedText.cpp_str(), true);
                 if (!sel.empty())
                 {
                     addToHistory();
@@ -3219,7 +3219,7 @@ static string getSelectionName(const Selection& sel, const Universe& univ)
     case Selection::Type_DeepSky:
         return univ.getDSOCatalog()->getDSOName(sel.deepsky(), false);
     case Selection::Type_Star:
-        return ReplaceGreekLetterAbbr(univ.getStarCatalog()->getStarName(*sel.star(), true));
+        return univ.getStarCatalog()->getStarName(*sel.star(), true);
     case Selection::Type_Location:
         return sel.location()->getName(false);
     default:
@@ -3242,7 +3242,7 @@ static void displaySelectionName(Overlay& overlay,
         break;
     case Selection::Type_Star:
         //displayStarName(overlay, *(sel.star()), *univ.getStarCatalog());
-        overlay << ReplaceGreekLetterAbbr(univ.getStarCatalog()->getStarName(*sel.star(), true));
+        overlay << univ.getStarCatalog()->getStarName(*sel.star(), true);
         break;
     case Selection::Type_Location:
         overlay << sel.location()->getName(true);
@@ -3763,7 +3763,7 @@ void CelestiaCore::renderOverlay()
         glTranslatef(0.0f, fontHeight * 3.0f + 35.0f, 0.0f);
         glColor4f(0.6f, 0.6f, 1.0f, 1.0f);
         overlay->beginText();
-        *overlay << _("Target name: ") << ReplaceGreekLetterAbbr(typedText);
+        *overlay << _("Target name: ") << typedText;
         overlay->endText();
         overlay->setFont(font);
         if (typedTextCompletion.size() >= 1)
@@ -3772,7 +3772,7 @@ void CelestiaCore::renderOverlay()
             int nb_lines = 3;
             int start = 0;
             glTranslatef(3.0f, -font->getHeight() - 3.0f, 0.0f);
-            vector<std::string>::const_iterator iter = typedTextCompletion.begin();
+            completion_t::const_iterator iter = typedTextCompletion.begin();
             if (typedTextCompletionIdx >= nb_cols * nb_lines)
             {
                start = (typedTextCompletionIdx / nb_lines + 1 - nb_cols) * nb_lines;
@@ -3788,7 +3788,7 @@ void CelestiaCore::renderOverlay()
                         glColor4f(1.0f, 0.6f, 0.6f, 1);
                     else
                         glColor4f(0.6f, 0.6f, 1.0f, 1);
-                    *overlay << ReplaceGreekLetterAbbr(*iter) << "\n";
+                    *overlay << *iter << "\n";
                 }
                 overlay->endText();
                 glPopMatrix();

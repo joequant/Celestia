@@ -40,5 +40,5 @@ set(WIN32_HEADERS
 
 add_executable(celestia-win WIN32 ${WIN32_SOURCES})
 cotire(celestia-win)
-target_link_libraries(celestia-win ${CELESTIA_LIBS})
+target_link_libraries(celestia-win ${CELESTIA_LIBS} tinyutf8)
 install(TARGETS celestia-win RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

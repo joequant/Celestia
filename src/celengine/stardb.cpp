@@ -316,9 +316,9 @@ Star* StarDatabase::searchCrossIndex(const Catalog catalog, const uint32_t numbe
 }
 
 
-vector<string> StarDatabase::getCompletion(const string& name) const
+completion_t StarDatabase::getCompletion(const string& name) const
 {
-    vector<string> completion;
+    completion_t completion;
 
     // only named stars are supported by completion.
     if (!name.empty() && namesDB != nullptr)
@@ -379,7 +379,7 @@ string StarDatabase::getStarName(const Star& star, bool i18n) const
             if (i18n && iter->second != _(iter->second.c_str()))
                 return _(iter->second.c_str());
             else
-                return iter->second;
+                return iter->second.cpp_str();
         }
     }
 
@@ -433,7 +433,7 @@ string StarDatabase::getStarNameList(const Star& star, const unsigned int maxNam
         if (count != 0)
             starNames += " / ";
 
-        starNames += ReplaceGreekLetterAbbr(iter->second.c_str());
+        starNames += iter->second.c_str();
         ++iter;
         ++count;
     }

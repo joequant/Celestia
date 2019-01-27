@@ -114,7 +114,7 @@ class StarDatabase
     Star* find(const std::string&) const;
     uint32_t findCatalogNumberByName(const std::string&) const;
 
-    std::vector<std::string> getCompletion(const std::string&) const;
+    completion_t getCompletion(const std::string&) const;
 
     void findVisibleStars(StarHandler& starHandler,
                           const Eigen::Vector3f& obsPosition,

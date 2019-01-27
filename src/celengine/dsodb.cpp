@@ -100,9 +100,9 @@ DeepSkyObject* DSODatabase::find(const string& name) const
 }
 
 
-vector<string> DSODatabase::getCompletion(const string& name) const
+completion_t DSODatabase::getCompletion(const string& name) const
 {
-    vector<string> completion;
+    completion_t completion;
 
     // only named DSOs are supported by completion.
     if (!name.empty() && namesDB != nullptr)
@@ -124,7 +124,7 @@ string DSODatabase::getDSOName(const DeepSkyObject* const & dso, bool i18n) cons
             if (i18n && iter->second != _(iter->second.c_str()))
                 return _(iter->second.c_str());
             else
-                return iter->second;
+                return iter->second.cpp_str();
         }
     }
 
@@ -146,7 +146,7 @@ string DSODatabase::getDSONameList(const DeepSkyObject* const & dso, const unsig
         if (count != 0)
             dsoNames   += " / ";
 
-        dsoNames   += ReplaceGreekLetterAbbr(iter->second);
+        dsoNames   += iter->second.cpp_str();
         ++iter;
         ++count;
     }

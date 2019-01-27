@@ -1322,9 +1322,7 @@ void Renderer::addAnnotation(vector<Annotation>& annotations,
                 a.labelText = labelText;
         }
         else
-        {
-            a.labelText = ReplaceGreekLetterAbbr(labelText);
-        }
+            a.labelText = labelText;
         a.markerRep = markerRep;
         a.color = color;
         a.position = Vector3f((float) winX, (float) winY, -depth);

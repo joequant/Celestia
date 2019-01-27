@@ -1,27 +1,29 @@
 
-#include "name.h"
-
+#include <iostream>
 #include <celengine/constellation.h>
+#include "name.h"
+#include <celutil/utf8.h>
 
 uint32_t NameDatabase::getNameCount() const
 {
     return nameIndex.size();
 }
 
-void NameDatabase::add(const uint32_t catalogNumber, const std::string& name)
+void NameDatabase::add(const uint32_t catalogNumber, const utf8_string& name)
 {
     if (name.length() != 0)
     {
+        utf8_string fname = ReplaceGreekLetterAbbr(name.cpp_str());
 #ifdef DEBUG
         uint32_t tmp;
         if ((tmp = getCatalogNumberByName(name)) != InvalidCatalogNumber)
-            DPRINTF(2,"Duplicated name '%s' on object with catalog numbers: %d and %d\n", name.c_str(), tmp, catalogNumber);
+            DPRINTF(2,"Duplicated name '%s' on object with catalog numbers: %d and %d\n", fname.c_str(), tmp, catalogNumber);
 #endif
         // Add the new name
         //nameIndex.insert(NameIndex::value_type(name, catalogNumber));
 
-        nameIndex[name]   = catalogNumber;
-        numberIndex.insert(NumberIndex::value_type(catalogNumber, name));
+        nameIndex[fname]   = catalogNumber;
+        numberIndex.insert(NumberIndex::value_type(catalogNumber, fname));
     }
 }
 void NameDatabase::erase(const uint32_t catalogNumber)
@@ -29,7 +31,7 @@ void NameDatabase::erase(const uint32_t catalogNumber)
     numberIndex.erase(catalogNumber);
 }
 
-uint32_t NameDatabase::getCatalogNumberByName(const std::string& name) const
+uint32_t NameDatabase::getCatalogNumberByName(const utf8_string& name) const
 {
     NameIndex::const_iterator iter = nameIndex.find(name);
 
@@ -55,7 +57,7 @@ std::string NameDatabase::getNameByCatalogNumber(const uint32_t catalogNumber) c
     NumberIndex::const_iterator iter = numberIndex.lower_bound(catalogNumber);
 
     if (iter != numberIndex.end() && iter->first == catalogNumber)
-        return iter->second;
+        return iter->second.cpp_str();
 
     return "";
 }
@@ -84,18 +86,34 @@ NameDatabase::NumberIndex::const_iterator NameDatabase::getFinalNameIter() const
     return numberIndex.end();
 }
 
-std::vector<std::string> NameDatabase::getCompletion(const std::string& name) const
+completion_t NameDatabase::getCompletion(const utf8_string& name, bool greek) const
 {
-    std::vector<std::string> completion;
-    int name_length = UTF8Length(name);
+    if (greek)
+    {
+        auto compList = getGreekCompletion(name.cpp_str());
+        compList.push_back(name.cpp_str());
+        return getCompletion(compList);
+    }
+
+    completion_t completion;
 
     for (NameIndex::const_iterator iter = nameIndex.begin(); iter != nameIndex.end(); ++iter)
     {
-        if (!UTF8StringCompare(iter->first, name, name_length))
+        if (isSubstring(iter->first, name, true))
         {
             completion.push_back(iter->first);
         }
     }
+    return completion;
+}
+
+completion_t NameDatabase::getCompletion(const std::vector<std::string> &list) const
+{
+    completion_t completion;
+    for (const auto &n : list)
+        for (const auto &nn : getCompletion(n, false))
+            completion.push_back(nn);
+
     return completion;
 }
 
@@ -104,18 +122,22 @@ std::vector<std::string> NameDatabase::getCompletion(const std::string& name) co
 //
 
 
-uint32_t NameDatabase::findCatalogNumberByName(const std::string& name) const
+uint32_t NameDatabase::findCatalogNumberByName(const utf8_string& name) const
 {
-    std::string priName   = name;
-    std::string altName;
+    uint32_t catalogNumber = getCatalogNumberByName(name);
+    if (catalogNumber != InvalidCatalogNumber)
+        return catalogNumber;
+
+    utf8_string priName   = name;
+    utf8_string altName;
 
     // See if the name is a Bayer or Flamsteed designation
-    std::string::size_type pos  = name.find(' ');
-    if (pos != 0 && pos != std::string::npos && pos < name.length() - 1)
+    utf8_string::size_type pos  = name.find(' ');
+    if (pos != 0 && pos != utf8_string::npos && pos < name.length() - 1)
     {
-        std::string prefix(name, 0, pos);
-        std::string conName(name, pos + 1, std::string::npos);
-        Constellation* con  = Constellation::getConstellation(conName);
+        utf8_string prefix(name, 0, pos);
+        utf8_string conName(name, pos + 1, utf8_string::npos);
+        Constellation* con  = Constellation::getConstellation(conName.cpp_str());
         if (con != nullptr)
         {
             char digit  = ' ';
@@ -134,7 +156,7 @@ uint32_t NameDatabase::findCatalogNumberByName(const std::string& name) const
             // We have a valid constellation as the last part
             // of the name.  Next, we see if the first part of
             // the name is a greek letter.
-            const std::string& letter = Greek::canonicalAbbreviation(std::string(prefix, 0, len));
+            const utf8_string& letter = Greek::canonicalAbbreviation(utf8_string(prefix, 0, len).cpp_str());
             if (letter != "")
             {
                 // Matched . . . this is a Bayer designation
@@ -158,7 +180,7 @@ uint32_t NameDatabase::findCatalogNumberByName(const std::string& name) const
         }
     }
 
-    uint32_t catalogNumber   = getCatalogNumberByName(priName);
+    catalogNumber = getCatalogNumberByName(priName);
     if (catalogNumber != InvalidCatalogNumber)
         return catalogNumber;
 
@@ -185,7 +207,7 @@ uint32_t NameDatabase::findCatalogNumberByName(const std::string& name) const
 bool NameDatabase::loadNames(std::istream& in)
 {
     bool failed = false;
-    std::string s;
+    utf8_string s;
 
     while (!failed)
     {
@@ -213,14 +235,14 @@ bool NameDatabase::loadNames(std::istream& in)
         // Iterate through the string for names delimited
         // by ':', and insert them into the star database. Note that
         // db->add() will skip empty names.
-        std::string::size_type startPos = 0;
-        while (startPos != std::string::npos)
+        utf8_string::size_type startPos = 0;
+        while (startPos != utf8_string::npos)
         {
             ++startPos;
-            std::string::size_type next = name.find(':', startPos);
-            std::string::size_type length = std::string::npos;
+            utf8_string::size_type next = name.find(':', startPos);
+            utf8_string::size_type length = utf8_string::npos;
 
-            if (next != std::string::npos)
+            if (next != utf8_string::npos)
                 length = next - startPos;
 
             add(catalogNumber, name.substr(startPos, length));

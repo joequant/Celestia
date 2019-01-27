@@ -77,9 +77,9 @@ set_target_properties(celestia PROPERTIES
   SOVERSION ${VERSION}
 )
 ]]#
-add_dependencies(celestia celengine celephem)
+add_dependencies(celestia celengine celephem tinyutf8)
 cotire(celestia)
-target_link_libraries(celestia celengine celephem)
+target_link_libraries(celestia celengine celephem tinyutf8)
 #install(TARGETS celestia LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 # celestia-glut binary

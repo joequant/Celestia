@@ -21,6 +21,7 @@
 #include <celengine/universe.h>
 #include <celengine/render.h>
 #include <celengine/simulation.h>
+#include <celengine/name.h>
 #include <GL/glew.h>
 #include "configfile.h"
 #include "favorites.h"
@@ -413,8 +414,8 @@ class CelestiaCore // : public Watchable<CelestiaCore>
 
     OverlayImage *image{ nullptr };
 
-    std::string typedText;
-    std::vector<std::string> typedTextCompletion;
+    utf8_string typedText;
+    completion_t typedTextCompletion;
     int typedTextCompletionIdx{ -1 };
     int textEnterMode{ KbNormal };
     int hudDetail{ 2 }; // def 1

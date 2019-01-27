@@ -1319,9 +1319,9 @@ bool PlanetarySystem::traverse(TraversalFunc func, void* info) const
     return true;
 }
 
-std::vector<std::string> PlanetarySystem::getCompletion(const std::string& _name, bool deepSearch) const
+completion_t PlanetarySystem::getCompletion(const std::string& _name, bool deepSearch) const
 {
-    std::vector<std::string> completion;
+    completion_t completion;
     int _name_length = UTF8Length(_name);
 
     // Search through all names in this planetary system.
