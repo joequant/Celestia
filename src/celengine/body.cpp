@@ -931,14 +931,14 @@ vector<Location*>* Body::getLocations() const
 }
 
 
-Location* Body::findLocation(const string& name, bool i18n) const
+Location* Body::findLocation(const utf8_string& name, bool i18n) const
 {
     if (!locations)
         return nullptr;
 
     for (const auto location : *locations)
     {
-        if (!UTF8StringCompare(name, location->getName(i18n)))
+        if (name != location->getName(i18n))
             return location;
     }
 
@@ -1286,7 +1286,7 @@ Body* PlanetarySystem::find(const string& _name, bool deepSearch, bool i18n) con
     {
         for (const auto sat : satellites)
         {
-            if (UTF8StringCompare(sat->getName(i18n), _name) == 0)
+            if (utf8_string(sat->getName(i18n)) == _name)
                 return sat;
             if (sat->getSatellites())
             {
@@ -1322,14 +1322,13 @@ bool PlanetarySystem::traverse(TraversalFunc func, void* info) const
 completion_t PlanetarySystem::getCompletion(const std::string& _name, bool deepSearch) const
 {
     completion_t completion;
-    int _name_length = UTF8Length(_name);
 
     // Search through all names in this planetary system.
     for (const auto& index : objectIndex)
     {
-        const string& alias = index.first;
+        const utf8_string& alias = index.first;
 
-        if (UTF8StringCompare(alias, _name, _name_length) == 0)
+        if (isSubstring(alias, _name, true))
         {
             completion.push_back(alias);
         }
@@ -1366,6 +1365,5 @@ int PlanetarySystem::getOrder(const Body* body) const
 
 Selection Body::toSelection()
 {
-//    std::cout << "Body::toSelection()\n";
     return Selection(this);
 }

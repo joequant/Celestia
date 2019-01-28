@@ -70,7 +70,7 @@ class PlanetarySystem
     void removeBodyFromNameIndex(const Body* body);
 
  private:
-    typedef std::map<std::string, Body*, UTF8StringOrderingPredicate> ObjectIndex;
+    typedef std::map<utf8_string, Body*> ObjectIndex;
 
  private:
     Star* star;
@@ -306,7 +306,7 @@ class Body : public CatEntry
 
     std::vector<Location*>* getLocations() const;
     void addLocation(Location*);
-    Location* findLocation(const std::string&, bool i18n = false) const;
+    Location* findLocation(const utf8_string&, bool i18n = false) const;
     void computeLocations();
 
     bool isVisible() const { return visible == 1; }
