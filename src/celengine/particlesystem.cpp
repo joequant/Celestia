@@ -17,7 +17,7 @@
 #include <limits>
 #include "modelgeometry.h"
 #include "particlesystem.h"
-#include <GL/glew.h>
+#include "glsupport.h"
 #include "vecgl.h"
 #include "rendcontext.h"
 #include "texmanager.h"
@@ -324,8 +324,6 @@ ParticleEmitter::render(double tsec,
     Vector3f v2 = modelViewMatrix * Vector3f( 1.0f,  1.0f, 0.0f);
     Vector3f v3 = modelViewMatrix * Vector3f(-1.0f,  1.0f, 0.0f);
 
-    glDisable(GL_LIGHTING);
-
     Texture* texture = nullptr;
     if (m_texture != InvalidResource)
     {
@@ -333,14 +331,7 @@ ParticleEmitter::render(double tsec,
     }
 
     if (texture != nullptr)
-    {
-        glEnable(GL_TEXTURE_2D);
         texture->bind();
-    }
-    else
-    {
-        glDisable(GL_TEXTURE_2D);
-    }
 
     // Use premultiplied alpha
     glEnable(GL_BLEND);
@@ -493,9 +484,6 @@ ParticleSystem::render(RenderContext& rc, double tsec)
     {
         emitter->render(tsec, rc, m_vertexData, m_particleCapacity);
     }
-
-    glEnable(GL_LIGHTING);
-    glEnable(GL_TEXTURE_2D);
 }
 
 

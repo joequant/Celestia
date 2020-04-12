@@ -11,10 +11,6 @@
 #ifndef _CELENGINE_ASTRO_H_
 #define _CELENGINE_ASTRO_H_
 
-#ifdef __CELVEC__
-#include <celmath/vecmath.h>
-#include <celmath/quaternion.h>
-#endif
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <iostream>
@@ -203,18 +199,15 @@ namespace astro
     bool isLengthUnit(string unitName);
     bool isTimeUnit(string unitName);
     bool isAngleUnit(string unitName);
+    bool isMassUnit(string unitName);
     bool getLengthScale(const string& unitName, double& scale);
     bool getTimeScale(const string& unitName, double& scale);
     bool getAngleScale(const string& unitName, double& scale);
+    bool getMassScale(const string& unitName, double& scale);
 
     void decimalToDegMinSec(double angle, int& degrees, int& minutes, double& seconds);
     double degMinSecToDecimal(int degrees, int minutes, double seconds);
     void decimalToHourMinSec(double angle, int& hours, int& minutes, double& seconds);
-
-#ifdef __CELVEC__
-    float sphereIlluminationFraction(Point3d spherePos,
-                                     Point3d viewerPos);
-#endif
 
     Eigen::Vector3f equatorialToCelestialCart(float ra, float dec, float distance);
     Eigen::Vector3d equatorialToCelestialCart(double ra, double dec, double distance);
@@ -236,6 +229,7 @@ namespace astro
     extern const double SolarMass;
     extern const double EarthMass;
     extern const double LunarMass;
+    extern const double JupiterMass;
 
     extern const double J2000Obliquity;
 

@@ -10,10 +10,7 @@
  *  $Id: main.cpp,v 1.9 2008-01-21 04:55:19 suwalski Exp $
  */
 
-#ifdef HAVE_CONFIG_H
 #include <config.h>
-#endif /* HAVE_CONFIG_H */
-
 #include <iostream>
 #include <fstream>
 #include <cstdlib>
@@ -27,14 +24,12 @@
 #include <unistd.h>
 #endif /* WIN32 */
 
-#include <GL/glew.h>
 #include <gtk/gtk.h>
 #include <gtk/gtkgl.h>
 
 #include <celengine/astro.h>
-#include <celengine/celestia.h>
-
 #include <celengine/galaxy.h>
+#include <celengine/glsupport.h>
 #include <celengine/simulation.h>
 #include <celestia/celestiacore.h>
 #include <celutil/debug.h>
@@ -65,6 +60,7 @@
 #endif /* DEBUG */
 
 
+using namespace celestia;
 using namespace std;
 
 
@@ -216,25 +212,51 @@ void GtkWatcher::notifyChange(CelestiaCore*, int property)
 
 /* END Watcher */
 
+class GtkAlerter : public CelestiaCore::Alerter
+{
+private:
+    AppData* app;
+
+public:
+    GtkAlerter() = delete;
+    GtkAlerter(AppData* _app) : app(_app) {};
+    ~GtkAlerter() = default;
+    GtkAlerter(const GtkAlerter&) = delete;
+    GtkAlerter(GtkAlerter&&) = delete;
+    GtkAlerter& operator=(const GtkAlerter&) = delete;
+    GtkAlerter& operator=(GtkAlerter&&) = delete;
+
+    void fatalError(const std::string& errorMsg)
+    {
+        GtkWidget* errBox = gtk_message_dialog_new(GTK_WINDOW(app->mainWindow),
+                                                   GTK_DIALOG_DESTROY_WITH_PARENT,
+                                                   GTK_MESSAGE_ERROR,
+                                                   GTK_BUTTONS_OK, "%s",
+                                                   errorMsg.c_str());
+        gtk_dialog_run(GTK_DIALOG(errBox));
+        gtk_widget_destroy(errBox);
+    }
+};
+
 
 /* CALLBACK: Event "realize" on the main GL area. Things that go here are those
  *           that require the glArea to be set up. */
 static void initRealize(GtkWidget* widget, AppData* app)
 {
-    GLenum glewErr = glewInit();
-       {
-         if (GLEW_OK != glewErr)
-        {
+    if (!gl::init() || !gl::checkVersion(gl::GL_2_1))
+    {
         GtkWidget *message;
-            message = gtk_message_dialog_new(GTK_WINDOW(app->mainWindow),
-            GTK_DIALOG_DESTROY_WITH_PARENT,
-            GTK_MESSAGE_ERROR,
-            GTK_BUTTONS_CLOSE,
-            "Celestia was unable to initialize OpenGL extensions. Graphics quality will be reduced. Only Basic render path will be available.");
+        message = gtk_message_dialog_new(GTK_WINDOW(app->mainWindow),
+                                         GTK_DIALOG_DESTROY_WITH_PARENT,
+                                         GTK_MESSAGE_ERROR,
+                                         GTK_BUTTONS_CLOSE,
+                                         "Celestia was unable to initialize OpenGL 2.1.");
         gtk_dialog_run(GTK_DIALOG(message));
         gtk_widget_destroy(message);
-        }
+	exit(1);
     }
+
+    app->core->setAlerter(new GtkAlerter(app));
 
     if (!app->core->initRenderer())
     {
@@ -260,16 +282,12 @@ static void initRealize(GtkWidget* widget, AppData* app)
     if (app->fullScreen)
         gtk_toggle_action_set_active(GTK_TOGGLE_ACTION(gtk_action_group_get_action(app->agMain, "FullScreen")), TRUE);
 
-    /* If framerate limiting is off, set it so. */
-    if (!app->renderer->getVideoSync())
-        gtk_toggle_action_set_active(GTK_TOGGLE_ACTION(gtk_action_group_get_action(app->agMain, "VideoSync")), FALSE);
-
     /* If URL at startup, make it so. */
     if (app->startURL != NULL)
         app->core->setStartURL(app->startURL);
 
     /* Set simulation time */
-    app->core->start((double)time(NULL) / 86400.0 + (double)astro::Date(1970, 1, 1));
+    app->core->start();
     updateTimeZone(app, app->showLocalTime);
 
     /* Setting time zone name not very useful, but makes space for "LT" status in
@@ -284,6 +302,16 @@ static void initRealize(GtkWidget* widget, AppData* app)
 /* MAIN */
 int main(int argc, char* argv[])
 {
+    /* Force number displays into C locale. */
+    setlocale(LC_NUMERIC, "C");
+    setlocale(LC_ALL, "");
+
+    #ifndef WIN32
+    bindtextdomain(PACKAGE, LOCALEDIR);
+    bind_textdomain_codeset(PACKAGE, "UTF-8");
+    textdomain(PACKAGE);
+    #endif /* WIN32 */
+
     /* Initialize the structure that holds the application's vitals. */
     AppData* app = g_new0(AppData, 1);
 
@@ -344,16 +372,6 @@ int main(int argc, char* argv[])
 
     SetDebugVerbosity(0);
 
-    /* Force number displays into C locale. */
-    setlocale(LC_NUMERIC, "C");
-    setlocale(LC_ALL, "");
-
-    #ifndef WIN32
-    bindtextdomain(PACKAGE, LOCALEDIR);
-    bind_textdomain_codeset(PACKAGE, "UTF-8");
-    textdomain(PACKAGE);
-    #endif /* WIN32 */
-
     app->core = new CelestiaCore();
     if (app->core == NULL)
     {
@@ -369,7 +387,7 @@ int main(int argc, char* argv[])
     if (configFile != NULL)
         altConfig = string(configFile);
 
-    vector<string> configDirs;
+    vector<fs::path> configDirs;
     if (extrasDir != NULL)
     {
         /* Add each extrasDir to the vector */
@@ -389,6 +407,7 @@ int main(int argc, char* argv[])
     g_assert(app->simulation);
 
     app->renderer->setSolarSystemMaxDistance(app->core->getConfig()->SolarSystemMaxDistance);
+    app->renderer->setShadowMapSize(app->core->getConfig()->ShadowMapSize);
 
     #ifdef GNOME
     /* Create the main window (GNOME) */
@@ -477,11 +496,11 @@ int main(int argc, char* argv[])
     /* Create the main menu bar */
     createMainMenu(app->mainWindow, app);
 
-    /* Initialize the context menu */
-    initContext(app);
+    /* Initialize the context menu handler */
+    GTKContextMenuHandler *handler = new GTKContextMenuHandler(app);
 
-    /* Set context menu callback for the core */
-    app->core->setContextMenuCallback(menuContext);
+    /* Set context menu handler for the core */
+    app->core->setContextMenuHandler(handler);
 
     #ifdef GNOME
     /* Set window contents (GNOME) */

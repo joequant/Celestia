@@ -15,13 +15,14 @@
 #include "body.h"
 #include "selection.h"
 #include "vecgl.h"
+#include "vertexobject.h"
 #include <celmath/intersect.h>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <cmath>
 
 using namespace Eigen;
-
+using namespace celmath;
 
 
 /*! Construct a new reference mark that shows the outline of the
@@ -80,59 +81,48 @@ VisibleRegion::setOpacity(float opacity)
 }
 
 
-template <typename T> static Matrix<T, 3, 1>
-ellipsoidTangent(const Matrix<T, 3, 1>& recipSemiAxes,
-                 const Matrix<T, 3, 1>& w,
-                 const Matrix<T, 3, 1>& e,
-                 const Matrix<T, 3, 1>& e_,
-                 T ee)
+constexpr const unsigned maxSections = 360;
+
+static void
+renderTerminator(Renderer* renderer, const vector<Vector3f>& pos, const Vector4f& color, const Quaternionf& qf)
 {
-    // We want to find t such that -E(1-t) + Wt is the direction of a ray
-    // tangent to the ellipsoid.  A tangent ray will intersect the ellipsoid
-    // at exactly one point.  Finding the intersection between a ray and an
-    // ellipsoid ultimately requires using the quadratic formula, which has
-    // one solution when the discriminant (b^2 - 4ac) is zero.  The code below
-    // computes the value of t that results in a discriminant of zero.
-    Matrix<T, 3, 1> w_ = w.cwiseProduct(recipSemiAxes);//(w.x * recipSemiAxes.x, w.y * recipSemiAxes.y, w.z * recipSemiAxes.z);
-    T ww = w_.dot(w_);
-    T ew = w_.dot(e_);
+    /*!
+     * Proper terminator calculation requires double precision floats in GLSL
+     * which were introduced in ARB_gpu_shader_fp64 unavailable with GL2.1.
+     * Because of this we make calculations on a CPU and stream results to GPU.
+     */
 
-    // Before elimination of terms:
-    // double a =  4 * square(ee + ew) - 4 * (ee + 2 * ew + ww) * (ee - 1.0f);
-    // double b = -8 * ee * (ee + ew)  - 4 * (-2 * (ee + ew) * (ee - 1.0f));
-    // double c =  4 * ee * ee         - 4 * (ee * (ee - 1.0f));
+    auto *prog = renderer->getShaderManager().getShader("uniform_color");
+    if (prog == nullptr)
+        return;
 
-    // Simplify the below expression and eliminate the ee^2 terms; this
-    // prevents precision errors, as ee tends to be a very large value.
-    //T a =  4 * square(ee + ew) - 4 * (ee + 2 * ew + ww) * (ee - 1);
-    T a =  4 * (square(ew) - ee * ww + ee + 2 * ew + ww);
-    T b = -8 * (ee + ew);
-    T c =  4 * ee;
+    auto &vo = renderer->getVertexObject(VOType::Terminator, GL_ARRAY_BUFFER, 0, GL_STREAM_DRAW);
 
-    T t = 0;
-    T discriminant = b * b - 4 * a * c;
+    vo.bindWritable();
+    if (!vo.initialized())
+    {
+        vo.setBufferSize(maxSections * sizeof(Vector3f));
+        vo.allocate();
+        vo.setVertices(3, GL_FLOAT);
+    }
 
-    if (discriminant < 0)
-        t = (-b + (T) sqrt(-discriminant)) / (2 * a); // Bad!
-    else
-        t = (-b + (T) sqrt(discriminant)) / (2 * a);
+    vo.setBufferData(pos.data(), 0, pos.size() * sizeof(Vector3f));
 
-    // V is the direction vector.  We now need the point of intersection,
-    // which we obtain by solving the quadratic equation for the ray-ellipse
-    // intersection.  Since we already know that the discriminant is zero,
-    // the solution is just -b/2a
-    Matrix<T, 3, 1> v = -e * (1 - t) + w * t;
-    Matrix<T, 3, 1> v_ = v.cwiseProduct(recipSemiAxes);
-    T a1 = v_.dot(v_);
-    T b1 = (T) 2 * v_.dot(e_);
-    T t1 = -b1 / (2 * a1);
+    prog->use();
+    prog->vec4Param("color") = color;
+    Eigen::Matrix4f m = Eigen::Matrix4f::Identity();
+    m.topLeftCorner(3, 3) = qf.conjugate().toRotationMatrix();
+    prog->mat4Param("rotate") = m;
 
-    return e + v * t1;
+    vo.draw(GL_LINE_LOOP, pos.size());
+
+    vo.unbind();
+    glUseProgram(0);
 }
 
 
 void
-VisibleRegion::render(Renderer* /* renderer */,
+VisibleRegion::render(Renderer* renderer,
                       const Vector3f& /* pos */,
                       float discSizeInPixels,
                       double tdb) const
@@ -157,7 +147,7 @@ VisibleRegion::render(Renderer* /* renderer */,
 
     // Base the amount of subdivision on the apparent size
     auto nSections = (unsigned int) (30.0f + discSizeInPixels * 0.5f);
-    nSections = min(nSections, 360u);
+    nSections = min(nSections, maxSections);
 
     Quaterniond q = m_body.getEclipticToBodyFixed(tdb);
     Quaternionf qf = q.cast<float>();
@@ -179,9 +169,6 @@ VisibleRegion::render(Renderer* /* renderer */,
 #else
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 #endif
-
-    glDisable(GL_TEXTURE_2D);
-    glDisable(GL_LIGHTING);
 
     glPushMatrix();
     glRotate(qf.conjugate());
@@ -211,8 +198,8 @@ VisibleRegion::render(Renderer* /* renderer */,
     Vector3d e_ = e.cwiseProduct(recipSemiAxes);
     double ee = e_.squaredNorm();
 
-    glColor4f(m_color.red(), m_color.green(), m_color.blue(), opacity);
-    glBegin(GL_LINE_LOOP);
+    vector<Vector3f> pos;
+    pos.reserve(nSections);
 
     for (unsigned i = 0; i < nSections; i++)
     {
@@ -221,16 +208,15 @@ VisibleRegion::render(Renderer* /* renderer */,
 
         Vector3d toCenter = ellipsoidTangent(recipSemiAxes, w, e, e_, ee);
         toCenter *= maxSemiAxis * scale;
-        glVertex3dv(toCenter.data());
+        pos.push_back(toCenter.cast<float>());
     }
 
-    glEnd();
+    renderTerminator(renderer, pos, Color(m_color, opacity).toVector4(), qf);
 
     glPopMatrix();
 
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
-    glEnable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
 }

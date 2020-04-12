@@ -10,14 +10,10 @@
 #ifndef _CELUTIL_BYTES_H_
 #define _CELUTIL_BYTES_H_
 
-#ifndef _WIN32
-#ifndef TARGET_OS_MAC
 #include <config.h>
-#endif /* TARGET_OS_MAC */
-#endif /* _WIN32 */
 
 #ifndef __BYTE_ORDER__
-# ifdef WIN32
+# ifdef _WIN32
 // FIXME: we assume that windows runs on LE hw only
 # define __BYTE_ORDER__ 1234
 # else

@@ -10,12 +10,15 @@
 #ifndef _OVERLAY_H_
 #define _OVERLAY_H_
 
+#include <array>
+#include <iosfwd>
 #include <string>
-#include <iostream>
-#include <celtxf/texturefont.h>
-
+#include <celutil/color.h>
 
 class Overlay;
+class Renderer;
+class Rect;
+class TextureFont;
 
 // Custom streambuf class to support C++ operator style output.  The
 // output is completely unbuffered so that it can coexist with printf
@@ -47,7 +50,8 @@ class OverlayStreamBuf : public std::streambuf
 class Overlay : public std::ostream
 {
  public:
-    Overlay();
+    Overlay(Renderer&);
+    Overlay() = delete;
     ~Overlay() = default;
 
     void begin();
@@ -56,7 +60,19 @@ class Overlay : public std::ostream
     void setWindowSize(int, int);
     void setFont(TextureFont*);
 
-    void rect(float x, float y, float w, float h, bool fill = true);
+    void setColor(float r, float g, float b, float a);
+    void setColor(const Color& c);
+
+    void moveBy(float dx, float dy, float dz = 0.0f);
+    void savePos();
+    void restorePos();
+
+    Renderer& getRenderer() const
+    {
+        return renderer;
+    };
+
+    void drawRectangle(const Rect&);
 
     void beginText();
     void endText();
@@ -75,7 +91,11 @@ class Overlay : public std::ostream
     float xoffset{ 0.0f };
     float yoffset{ 0.0f };
 
+    float lineWidth { 1.0f };
+
     OverlayStreamBuf sbuf;
+
+    Renderer& renderer;
 };
 
 #endif // _OVERLAY_H_

@@ -11,25 +11,36 @@
 #ifndef _CELENGINE_RENDER_H_
 #define _CELENGINE_RENDER_H_
 
+#include <list>
+#include <memory>
+#include <string>
+#include <vector>
 #include <Eigen/Core>
-#include <celmath/frustum.h>
 #include <celengine/universe.h>
-#include <celengine/observer.h>
 #include <celengine/selection.h>
-#include <celengine/glcontext.h>
 #include <celengine/starcolors.h>
 #include <celengine/rendcontext.h>
-#include <celtxf/texturefont.h>
-#include <vector>
-#include <list>
-#include <string>
+#include <celengine/renderlistentry.h>
+#include "vertexobject.h"
 
-
+#ifdef USE_GLCONTEXT
+class GLContext;
+#endif
 class RendererWatcher;
 class FrameTree;
 class ReferenceMark;
 class CurvePlot;
-class AsterismList;
+class Rect;
+class PointStarVertexBuffer;
+class AsterismRenderer;
+class BoundariesRenderer;
+class Observer;
+class TextureFont;
+class FramebufferObject;
+namespace celmath
+{
+class Frustum;
+};
 
 struct LightSource
 {
@@ -37,39 +48,6 @@ struct LightSource
     Color color;
     float luminosity;
     float radius;
-};
-
-
-struct RenderListEntry
-{
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-
-    enum RenderableType
-    {
-        RenderableStar,
-        RenderableBody,
-        RenderableCometTail,
-        RenderableReferenceMark,
-    };
-
-    union
-    {
-        const Star* star;
-        Body* body;
-        const ReferenceMark* refMark;
-    };
-
-    Eigen::Vector3f position;
-    Eigen::Vector3f sun;
-    float distance;
-    float radius;
-    float centerZ;
-    float nearZ;
-    float farZ;
-    float discSizeInPixels;
-    float appMag;
-    RenderableType renderableType;
-    bool isOpaque;
 };
 
 
@@ -82,7 +60,15 @@ struct SecondaryIlluminator
 };
 
 
-class PointStarVertexBuffer;
+enum class VOType
+{
+    Marker     = 0,
+    AxisArrow  = 1,
+    Rectangle  = 2,
+    Terminator = 3,
+    Count      = 4
+};
+
 
 class Renderer
 {
@@ -95,7 +81,6 @@ class Renderer
     struct DetailOptions
     {
         DetailOptions();
-        unsigned int ringSystemSections;
         unsigned int orbitPathSamplePoints;
         unsigned int shadowTextureSize;
         unsigned int eclipseTextureSize;
@@ -104,9 +89,14 @@ class Renderer
         double linearFadeFraction;
     };
 
+#ifdef USE_GLCONTEXT
     bool init(GLContext*, int, int, DetailOptions&);
+#else
+    bool init(int, int, DetailOptions&);
+#endif
     void shutdown() {};
     void resize(int, int);
+    float getAspectRatio() const;
 
     float calcPixelSize(float fovY, float windowHeight);
     void setFaintestAM45deg(float);
@@ -122,6 +112,8 @@ class Renderer
               const Universe&,
               float faintestVisible,
               const Selection& sel);
+
+    bool getInfo(std::map<std::string, std::string>& info) const;
 
     enum {
         NoLabels            = 0x000,
@@ -190,6 +182,14 @@ class Renderer
         StarStyleCount   = 3,
     };
 
+    // Pixel formats for image and video capture.
+    // Currently we map them 1:1 to GL
+    enum class PixelFormat
+    {
+        RGB = GL_RGB,
+        BGR_EXT = GL_BGR_EXT
+    };
+
     // constants
     constexpr static const uint64_t DefaultRenderFlags =
                                           Renderer::ShowStars          |
@@ -232,11 +232,30 @@ class Renderer
     void setOrbitMask(int);
     int getScreenDpi() const;
     void setScreenDpi(int);
+
+    // GL wrappers
+    void getViewport(int* x, int* y, int* w, int* h) const;
+    void getViewport(std::array<int, 4>& viewport) const;
+    void setViewport(int x, int y, int w, int h) const;
+    void setViewport(const std::array<int, 4>& viewport) const;
+    void setScissor(int x, int y, int w, int h);
+    void removeScissor();
+    void enableMSAA();
+    void disableMSAA();
+    bool isMSAAEnabled() const;
+    void drawRectangle(const Rect& r);
+    void setRenderRegion(int x, int y, int width, int height, bool withScissor = true);
+
     const ColorTemperatureTable* getStarColorTable() const;
     void setStarColorTable(const ColorTemperatureTable*);
-    bool getVideoSync() const;
-    void setVideoSync(bool);
+    [[deprecated]] bool getVideoSync() const;
+    [[deprecated]] void setVideoSync(bool);
     void setSolarSystemMaxDistance(float);
+    void setShadowMapSize(unsigned);
+
+    bool captureFrame(int, int, int, int, PixelFormat format, unsigned char*, bool = false) const;
+
+    void renderMarker(MarkerRepresentation::Symbol symbol, float size, const Color& color);
 
 #ifdef USE_HDR
     bool getBloomEnabled();
@@ -246,7 +265,9 @@ class Renderer
     float getBrightness();
 #endif
 
+#ifdef USE_GLCONTEXT
     GLContext* getGLContext() { return context; }
+#endif
 
     void setStarStyle(StarStyle);
     StarStyle getStarStyle() const;
@@ -305,7 +326,9 @@ class Renderer
                              LabelVerticalAlignment valign = VerticalAlignBottom,
                              float size = 0.0f);
 
-   ShaderManager& getShaderManager() const { return *shaderManager; }
+    ShaderManager& getShaderManager() const { return *shaderManager; }
+
+    celgl::VertexObject& getVertexObject(VOType, GLenum, GLsizeiptr, GLenum);
 
     // Callbacks for renderables; these belong in a special renderer interface
     // only visible in object's render methods.
@@ -349,6 +372,8 @@ class Renderer
     void removeWatcher(RendererWatcher*);
     void notifyWatchers() const;
 
+    FramebufferObject* getShadowFBO(int) const;
+
  public:
     // Internal types
     // TODO: Figure out how to make these private.  Even with a friend
@@ -376,6 +401,10 @@ class Renderer
         LightingState::EclipseShadowVector* eclipseShadows;
     };
 
+#ifdef OCTREE_DEBUG
+    OctreeProcStats m_starProcStats;
+    OctreeProcStats m_dsoProcStats;
+#endif
  private:
     struct SkyVertex
     {
@@ -439,14 +468,16 @@ class Renderer
     void renderSkyGrids(const Observer& observer);
     void renderSelectionPointer(const Observer& observer,
                                 double now,
-                                const Frustum& viewFrustum,
+                                const celmath::Frustum& viewFrustum,
                                 const Selection& sel);
 
     void renderAsterisms(const Universe&, float);
     void renderBoundaries(const Universe&, float);
+    void renderEclipticLine();
+    void renderCrosshair(float size, double tsec, const Color &color);
 
     void buildRenderLists(const Eigen::Vector3d& astrocentricObserverPos,
-                          const Frustum& viewFrustum,
+                          const celmath::Frustum& viewFrustum,
                           const Eigen::Vector3d& viewPlaneNormal,
                           const Eigen::Vector3d& frameCenter,
                           const FrameTree* tree,
@@ -454,10 +485,10 @@ class Renderer
                           double now);
     void buildOrbitLists(const Eigen::Vector3d& astrocentricObserverPos,
                          const Eigen::Quaterniond& observerOrientation,
-                         const Frustum& viewFrustum,
+                         const celmath::Frustum& viewFrustum,
                          const FrameTree* tree,
                          double now);
-    void buildLabelLists(const Frustum& viewFrustum,
+    void buildLabelLists(const celmath::Frustum& viewFrustum,
                          double now);
 
     void addRenderListEntries(RenderListEntry& rle,
@@ -501,7 +532,7 @@ class Renderer
 
     void renderCometTail(const Body& body,
                          const Eigen::Vector3f& pos,
-                         double now,
+                         const Observer& observer,
                          float discSizeInPixels);
 
     void renderObjectAsPoint_nosprite(const Eigen::Vector3f& center,
@@ -584,11 +615,13 @@ class Renderer
     void renderOrbit(const OrbitPathListEntry&,
                      double now,
                      const Eigen::Quaterniond& cameraOrientation,
-                     const Frustum& frustum,
+                     const celmath::Frustum& frustum,
                      float nearDist,
                      float farDist);
 
     void updateBodyVisibilityMask();
+
+    void createShadowFBO();
 
 #ifdef USE_HDR
  private:
@@ -623,7 +656,9 @@ class Renderer
 #endif
 
  private:
+#ifdef USE_GLCONTEXT
     GLContext* context;
+#endif
     ShaderManager* shaderManager{ nullptr };
 
     int windowWidth;
@@ -671,8 +706,8 @@ class Renderer
 
     std::vector<LightSource> lightSourceList;
 
-    double modelMatrix[16];
-    double projMatrix[16];
+    Eigen::Matrix4d modelMatrix;
+    Eigen::Matrix4d projMatrix;
 
     bool useCompressedTextures{ false };
     unsigned int textureResolution;
@@ -681,7 +716,13 @@ class Renderer
     uint32_t frameCount;
 
     int currentIntervalIndex{ 0 };
+    enum GLStateFlags
+    {
+        ScissorTest     = 0x0001,
+        Multisaple      = 0x0002,
+    };
 
+    int m_GLStateFlag { 0 };
 
  public:
 #if 0
@@ -726,19 +767,26 @@ class Renderer
 
     Selection highlightObject;
 
-    bool videoSync;
     bool settingsChanged;
+
+    AsterismRenderer* m_asterismRenderer { nullptr };
+    BoundariesRenderer* m_boundariesRenderer { nullptr };
 
     // True if we're in between a begin/endObjectAnnotations
     bool objectAnnotationSetOpen;
 
     double realTime{ true };
 
-   // Maximum size of a solar system in light years. Features beyond this distance
-   // will not necessarily be rendered correctly. This limit is used for
-   // visibility culling of solar systems.
-   float SolarSystemMaxDistance{ 1.0f };
+    // Maximum size of a solar system in light years. Features beyond this distance
+    // will not necessarily be rendered correctly. This limit is used for
+    // visibility culling of solar systems.
+    float SolarSystemMaxDistance{ 1.0f };
 
+    // Size of a texture used in shadow mapping
+    unsigned m_shadowMapSize { 0 };
+    std::unique_ptr<FramebufferObject> m_shadowFBO;
+
+    std::array<celgl::VertexObject*, static_cast<size_t>(VOType::Count)> m_VertexObjects;
 
     // Location markers
  public:

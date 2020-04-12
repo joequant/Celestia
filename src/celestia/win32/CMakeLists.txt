@@ -1,11 +1,10 @@
 if(NOT WIN32 OR NOT ENABLE_WIN)
-  message("Either not Windows or Windows frontend is disabled.")
+  message(STATUS "Either not Windows or Windows frontend is disabled.")
   return()
 endif()
 
 set(WIN32_SOURCES
-  iob_func_shim.cpp
-  ODMenu.cpp
+  odmenu.cpp
   wglext.cpp
   winbookmarks.cpp
   windatepicker.cpp
@@ -23,7 +22,7 @@ set(WIN32_SOURCES
 )
 
 set(WIN32_HEADERS
-  ODMenu.h
+  odmenu.h
   wglext.h
   winbookmarks.h
   wineclipses.h

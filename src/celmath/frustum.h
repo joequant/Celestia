@@ -13,13 +13,10 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
-// Compatibility
-#ifdef __CELVEC__
-#include <celmath/plane.h>
-#endif
-
 //#include <celmath/capsule.h>
 
+namespace celmath
+{
 
 class Frustum
 {
@@ -59,25 +56,13 @@ class Frustum
     Aspect testSphere(const Eigen::Vector3d& center, double radius) const;
 //    Aspect testCapsule(const Capsulef&) const;
 
-#ifdef __CELVEC__
-    // Compatibility
-    inline Planef getPlane(unsigned int which) const
-    {
-        PlaneType p = plane(which);
-        return Planef(Vec3f(p.coeffs().x(), p.coeffs().y(), p.coeffs().z()), p.coeffs().w());
-    }
-    void transform(const Mat3f&);
-    void transform(const Mat4f&);
-    Aspect test(const Point3f&) const;
-    Aspect testSphere(const Point3f& center, float radius) const;
-    Aspect testSphere(const Point3d& center, double radius) const;
-#endif
-
  private:
     void init(float, float, float, float);
 
     Eigen::Hyperplane<float, 3> planes[6];
     bool infinite;
 };
+
+}; // namespace celmath
 
 #endif // _CELMATH_FRUSTUM_H_

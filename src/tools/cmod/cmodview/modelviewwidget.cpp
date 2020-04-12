@@ -8,7 +8,7 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include <GL/glew.h>
+#include "glsupport.h"
 #include "modelviewwidget.h"
 #include "glframebuffer.h"
 #include <QFileInfo>
@@ -17,7 +17,9 @@
 #include <QTextStream>
 #include <Eigen/LU>
 #include <algorithm>
+#include <iostream>
 
+using namespace celestia;
 using namespace cmod;
 using namespace Eigen;
 
@@ -25,7 +27,7 @@ using namespace Eigen;
 #define DEBUG_SHADOWS 0
 
 static const float VIEWPORT_FOV = 45.0;
-static const double PI = 3.1415926535897932;
+//static const double PI = 3.1415926535897932;
 
 static const int ShadowBufferSize = 1024;
 static const int ShadowSampleKernelWidth = 2;
@@ -100,7 +102,7 @@ public:
                     texId = loadTexture(m_modelDirPath + "/../textures/medres/" + resourceName);
                 }
 
-                std::cout << "Load " << resourceName.toAscii().data() << ", texId = " << texId << std::endl;
+                std::cout << "Load " << resourceName.toStdString() << ", texId = " << texId << std::endl;
                 m_textures[resourceName] = texId;
                 return texId;
             }
@@ -202,9 +204,9 @@ Matrix4f directionalLightMatrix(const Vector3f& lightDirection)
     Vector3f upDir = viewDir.unitOrthogonal();
     Vector3f rightDir = upDir.cross(viewDir);
     Matrix4f m = Matrix4f::Identity();
-    m.row(0).start<3>() = rightDir;
-    m.row(1).start<3>() = upDir;
-    m.row(2).start<3>() = viewDir;
+    m.row(0).head(3) = rightDir;
+    m.row(1).head(3) = upDir;
+    m.row(2).head(3) = viewDir;
 
     return m;
 }
@@ -458,7 +460,7 @@ ModelViewWidget::select(const Vector2f& viewportPoint)
     Vector3d direction(h * aspectRatio * viewportPoint.x(), h * viewportPoint.y(), -1.0f);
     direction.normalize();
     Vector3d origin = Vector3d::Zero();
-    Transform3d camera(cameraTransform().inverse());
+    Affine3d camera(cameraTransform().inverse());
 
     Mesh::PickResult pickResult;
     bool hit = m_model->pick(camera * origin, camera.linear() * direction, &pickResult);
@@ -478,10 +480,10 @@ ModelViewWidget::select(const Vector2f& viewportPoint)
 }
 
 
-Transform3d
+Affine3d
 ModelViewWidget::cameraTransform() const
 {
-    Transform3d t(m_cameraOrientation.conjugate());
+    Affine3d t(m_cameraOrientation.conjugate());
     t.translate(-m_cameraPosition);
     return t;
 }
@@ -544,7 +546,7 @@ ModelViewWidget::setBackgroundColor(const QColor& color)
 void
 ModelViewWidget::initializeGL()
 {
-    glewInit();
+    gl::init();
     emit contextCreated();
 }
 
@@ -610,9 +612,9 @@ ModelViewWidget::paintGL()
 
         Vector3d direction = m_lightOrientation * lightSource.direction;
         Vector4f lightColor = Vector4f::Zero();
-        lightColor.start<3>() = lightSource.color * lightSource.intensity;
+        lightColor.head(3) = lightSource.color * lightSource.intensity;
         Vector4f lightPosition = Vector4f::Zero();
-        lightPosition.start<3>() = direction.cast<float>();
+        lightPosition.head(3) = direction.cast<float>();
 
         glEnable(glLight);
         glLightfv(glLight, GL_POSITION, lightPosition.data());
@@ -877,7 +879,7 @@ ModelViewWidget::setAmbientLight(bool enable)
 void
 ModelViewWidget::setShadows(bool enable)
 {
-    if (!GLEW_EXT_framebuffer_object)
+    if (!gl::EXT_framebuffer_object)
     {
         return;
     }
@@ -1010,7 +1012,7 @@ ModelViewWidget::bindMaterial(const Material* material,
 
         // Get the eye position in model space
         Vector4f eyePosition = cameraTransform().inverse().cast<float>() * Vector4f::UnitW();
-        shader->setUniformValue("eyePosition", eyePosition.start<3>());
+        shader->setUniformValue("eyePosition", eyePosition.head(3));
 
         // Set all shadow related values
         if (shaderKey.shadowCount() > 0)
@@ -1508,19 +1510,22 @@ ModelViewWidget::createShader(const ShaderKey& shaderKey)
 
     auto* glShader = new GLShaderProgram();
     auto* vertexShader = new GLVertexShader();
-    if (!vertexShader->compile(vertexShaderSource.toAscii().data()))
+    if (!vertexShader->compile(vertexShaderSource.toStdString()))
     {
         qWarning("Vertex shader error: %s", vertexShader->log().c_str());
-        std::cerr << vertexShaderSource.toAscii().data() << std::endl;
+        std::cerr << vertexShaderSource.toStdString() << std::endl;
+        delete vertexShader;
         delete glShader;
         return nullptr;
     }
 
     auto* fragmentShader = new GLFragmentShader();
-    if (!fragmentShader->compile(fragmentShaderSource.toAscii().data()))
+    if (!fragmentShader->compile(fragmentShaderSource.toStdString()))
     {
         qWarning("Fragment shader error: %s", fragmentShader->log().c_str());
-        std::cerr << fragmentShaderSource.toAscii().data() << std::endl;
+        std::cerr << fragmentShaderSource.toStdString() << std::endl;
+        delete vertexShader;
+        delete fragmentShader;
         delete glShader;
         return nullptr;
     }
@@ -1535,6 +1540,8 @@ ModelViewWidget::createShader(const ShaderKey& shaderKey)
     if (!glShader->link())
     {
         qWarning("Shader link error: %s", glShader->log().c_str());
+        delete vertexShader;
+        delete fragmentShader;
         delete glShader;
         return nullptr;
     }

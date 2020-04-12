@@ -37,7 +37,7 @@ class DSODatabase
     inline DeepSkyObject* getDSO(const uint32_t) const;
     inline uint32_t size() const;
 
-    DeepSkyObject* find(const uint32_t catalogNumber) const;
+    DeepSkyObject* find(const AstroCatalog::IndexNumber catalogNumber) const;
     DeepSkyObject* find(const std::string&) const;
 
     std::vector<std::string> getCompletion(const std::string&) const;
@@ -47,7 +47,8 @@ class DSODatabase
                          const Eigen::Quaternionf& obsOrientation,
                          float fovY,
                          float aspectRatio,
-                         float limitingMag) const;
+                         float limitingMag,
+                         OctreeProcStats * = nullptr) const;
 
     void findCloseDSOs(DSOHandler& dsoHandler,
                        const Eigen::Vector3d& obsPosition,
@@ -59,7 +60,7 @@ class DSODatabase
     DSONameDatabase* getNameDatabase() const;
     void setNameDatabase(DSONameDatabase*);
 
-    bool load(std::istream&, const std::string& resourcePath);
+    bool load(std::istream&, const fs::path& resourcePath = fs::path());
     bool loadBinary(std::istream&);
     void finish();
 
@@ -78,7 +79,7 @@ private:
     DSONameDatabase* namesDB{ nullptr };
     DeepSkyObject**  catalogNumberIndex{ nullptr };
     DSOOctree*       octreeRoot{ nullptr };
-    uint32_t         nextAutoCatalogNumber{ 0xfffffffe };
+    AstroCatalog::IndexNumber nextAutoCatalogNumber{ 0xfffffffe };
 
     double           avgAbsMag{ 0.0 };
 };

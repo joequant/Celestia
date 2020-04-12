@@ -10,34 +10,49 @@
 #ifndef _DEBUG_H_
 #define _DEBUG_H_
 
-// Define the DPRINTF macro; g++ supports macros with variable
-// length arguments, so we'll use those when we can.
-#ifndef DPRINTF
-
-#ifdef __GNUC__
-
-#ifndef DEBUG
-#define DPRINTF(level, args...)
-#else
-#define DPRINTF(level, args...) DebugPrint(level, args)
-extern void DebugPrint(int level, char *format, ...);
+#ifdef _MSC_VER
+#include <windows.h>
 #endif
+#include <iostream>
+#include <fmt/printf.h>
 
-#else
-
-#ifndef _DEBUG
-#define DPRINTF //
-#else
-#define DPRINTF DebugPrint
-extern void DebugPrint(int level, char *format, ...);
-#endif
-
-#endif // __GNUC__
-
+#ifdef DPRINTF
+#undef DPRINTF // OSX has DPRINTF
 #endif // DPRINTF
+
+// verbosity choices
+#define LOG_LEVEL_ERROR           0
+#define LOG_LEVEL_WARNING         1
+#define LOG_LEVEL_INFO            2
+#define LOG_LEVEL_VERBOSE         3
+#define LOG_LEVEL_DEBUG           4
+
+#if !defined(_DEBUG) && !defined(DEBUG)
+#define DPRINTF(level, format, ...) static_cast<void>(level);
+#else
+extern int debugVerbosity;
+template <typename... T>
+void DPRINTF(int level, const char *format, const T & ... args)
+{
+    if (level <= debugVerbosity)
+    {
+#ifdef _MSC_VER
+        if (IsDebuggerPresent())
+        {
+            OutputDebugStringA(fmt::sprintf(format, args...).c_str());
+        }
+        else
+        {
+            fmt::fprintf(std::cerr, format, args...);
+        }
+#else
+        fmt::fprintf(std::cerr, format, args...);
+#endif
+    }
+}
+#endif /* DEBUG */
 
 extern void SetDebugVerbosity(int);
 extern int GetDebugVerbosity();
 
 #endif // _DEBUG_H_
-

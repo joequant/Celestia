@@ -28,7 +28,7 @@ class RenderContext
 
     virtual void makeCurrent(const cmod::Material&) = 0;
     virtual void setVertexArrays(const cmod::Mesh::VertexDescription& desc,
-                                 const void* vertexData) = 0;
+                                 const void* vertexData);
     virtual void drawGroup(const cmod::Mesh::PrimitiveGroup& group);
 
     const cmod::Material* getMaterial() const;
@@ -79,11 +79,9 @@ class GLSL_RenderContext : public RenderContext
     ~GLSL_RenderContext() override;
 
     void makeCurrent(const cmod::Material&) override;
-    void setVertexArrays(const cmod::Mesh::VertexDescription& desc,
-                         const void* vertexData) override;
-
     void setLunarLambert(float);
     void setAtmosphere(const Atmosphere*);
+    void setShadowMap(GLuint, GLuint, const Eigen::Matrix4f*);
 
  private:
      void initLightingEnvironment();
@@ -102,6 +100,9 @@ class GLSL_RenderContext : public RenderContext
     float lunarLambert{ 0.0f };
 
     ShaderProperties shaderProps;
+    const Eigen::Matrix4f *lightMatrix { nullptr };
+    GLuint shadowMap { 0 };
+    GLuint shadowMapWidth { 0 };
 };
 
 
@@ -112,8 +113,6 @@ class GLSLUnlit_RenderContext : public RenderContext
     ~GLSLUnlit_RenderContext() override;
 
     void makeCurrent(const cmod::Material&) override;
-    void setVertexArrays(const cmod::Mesh::VertexDescription& desc,
-                         const void* vertexData) override;
 
  private:
     void initLightingEnvironment();

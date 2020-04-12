@@ -11,20 +11,27 @@
 #define _CELUTIL_UTF8_
 
 #include <string>
-#include <wchar.h>
+#include <vector>
 
 #define UTF8_DEGREE_SIGN         "\302\260"
 #define UTF8_MULTIPLICATION_SIGN "\303\227"
+#define UTF8_SUPERSCRIPT_0       "\342\201\260"
 #define UTF8_SUPERSCRIPT_1       "\302\271"
 #define UTF8_SUPERSCRIPT_2       "\302\262"
 #define UTF8_SUPERSCRIPT_3       "\302\263"
+#define UTF8_SUPERSCRIPT_4       "\342\201\264"
+#define UTF8_SUPERSCRIPT_5       "\342\201\265"
+#define UTF8_SUPERSCRIPT_6       "\342\201\266"
+#define UTF8_SUPERSCRIPT_7       "\342\201\267"
+#define UTF8_SUPERSCRIPT_8       "\342\201\270"
+#define UTF8_SUPERSCRIPT_9       "\342\201\271"
 
 
 bool UTF8Decode(const std::string& str, int pos, wchar_t& ch);
 bool UTF8Decode(const char* str, int pos, int length, wchar_t& ch);
 int UTF8Encode(wchar_t ch, char* s);
 int UTF8StringCompare(const std::string& s0, const std::string& s1);
-int UTF8StringCompare(const std::string& s0, const std::string& s1, size_t n);
+int UTF8StringCompare(const std::string& s0, const std::string& s1, size_t n, bool ignoreCase = false);
 
 class UTF8StringOrderingPredicate
 {
@@ -77,7 +84,9 @@ inline int UTF8EncodedSizeFromFirstByte(unsigned int ch)
 }
 
 std::string ReplaceGreekLetterAbbr(const std::string&);
+#if 0
 unsigned int ReplaceGreekLetterAbbr(char* dst, unsigned int dstSize, const char* src, unsigned int srcLength);
+#endif
 
 class Greek
 {
@@ -86,7 +95,8 @@ class Greek
     ~Greek();
 
  public:
-    enum Letter {
+    enum Letter
+    {
         Alpha     =  1,
         Beta      =  2,
         Gamma     =  3,
@@ -114,12 +124,15 @@ class Greek
     };
 
     static const std::string& canonicalAbbreviation(const std::string&);
-
+ private:
+    static Greek* m_instance;
  public:
-    static Greek* instance;
+    static Greek* getInstance();
     int nLetters;
     std::string* names;
     std::string* abbrevs;
 };
+
+std::vector<std::string> getGreekCompletion(const std::string &);
 
 #endif // _CELUTIL_UTF8_

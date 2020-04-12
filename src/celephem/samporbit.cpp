@@ -16,7 +16,8 @@
 #include <celengine/astro.h>
 #include <celmath/mathlib.h>
 #include <celutil/bytes.h>
-#include <celutil/util.h> // intl.h
+#include <celutil/gettext.h>
+#include <celutil/debug.h>
 #include <cmath>
 #include <string>
 #include <algorithm>
@@ -25,10 +26,10 @@
 #include <fstream>
 #include <limits>
 #include <iomanip>
-#include <fmt/printf.h>
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 // Trajectories are sampled adaptively for rendering.  MaxSampleInterval
 // is the maximum time (in days) between samples.  The threshold angle
@@ -203,9 +204,9 @@ template <typename T> Vector3d SampledOrbit<T>::computePosition(double jd) const
                 Sample<T> s1 = samples[n];
 
                 double t = (jd - s0.t) / (s1.t - s0.t);
-                pos = Vector3d(Mathd::lerp(t, (double) s0.x, (double) s1.x),
-                               Mathd::lerp(t, (double) s0.y, (double) s1.y),
-                               Mathd::lerp(t, (double) s0.z, (double) s1.z));
+                pos = Vector3d(lerp(t, (double) s0.x, (double) s1.x),
+                               lerp(t, (double) s0.y, (double) s1.y),
+                               lerp(t, (double) s0.z, (double) s1.z));
             }
             else if (interpolation == TrajectoryInterpolationCubic)
             {
@@ -722,9 +723,9 @@ static bool SkipComments(istream& in)
 // with a #; data is read start fromt the first non-whitespace character outside
 // of a comment.
 
-template <typename T> SampledOrbit<T>* LoadSampledOrbit(const string& filename, TrajectoryInterpolation interpolation, T /*unused*/)
+template <typename T> SampledOrbit<T>* LoadSampledOrbit(const fs::path& filename, TrajectoryInterpolation interpolation, T /*unused*/)
 {
-    ifstream in(filename);
+    ifstream in(filename.string());
     if (!in.good())
         return nullptr;
 
@@ -777,9 +778,9 @@ template <typename T> SampledOrbit<T>* LoadSampledOrbit(const string& filename, 
 // with a #; data is read start fromt the first non-whitespace character outside
 // of a comment.
 
-template <typename T> SampledOrbitXYZV<T>* LoadSampledOrbitXYZV(const string& filename, TrajectoryInterpolation interpolation, T /*unused*/)
+template <typename T> SampledOrbitXYZV<T>* LoadSampledOrbitXYZV(const fs::path& filename, TrajectoryInterpolation interpolation, T /*unused*/)
 {
-    ifstream in(filename);
+    ifstream in(filename.string());
     if (!in.good())
         return nullptr;
 
@@ -824,9 +825,9 @@ template <typename T> SampledOrbitXYZV<T>* LoadSampledOrbitXYZV(const string& fi
 /* Load a binary xyzv sampled trajectory file.
  */
 template <typename T> SampledOrbitXYZV<T>*
-LoadSampledOrbitXYZVBinary(const string& filename, TrajectoryInterpolation interpolation, T /*unused*/)
+LoadSampledOrbitXYZVBinary(const fs::path& filename, TrajectoryInterpolation interpolation, T /*unused*/)
 {
-    ifstream in(filename);
+    ifstream in(filename.string(), ios::binary);
     if (!in.good())
     {
         fmt::fprintf(cerr, _("Error openning %s.\n"), filename);
@@ -895,7 +896,7 @@ LoadSampledOrbitXYZVBinary(const string& filename, TrajectoryInterpolation inter
 
 /*! Load a trajectory file containing single precision positions.
  */
-Orbit* LoadSampledTrajectorySinglePrec(const string& filename, TrajectoryInterpolation interpolation)
+Orbit* LoadSampledTrajectorySinglePrec(const fs::path& filename, TrajectoryInterpolation interpolation)
 {
     return LoadSampledOrbit(filename, interpolation, 0.0f);
 }
@@ -903,7 +904,7 @@ Orbit* LoadSampledTrajectorySinglePrec(const string& filename, TrajectoryInterpo
 
 /*! Load a trajectory file containing double precision positions.
  */
-Orbit* LoadSampledTrajectoryDoublePrec(const string& filename, TrajectoryInterpolation interpolation)
+Orbit* LoadSampledTrajectoryDoublePrec(const fs::path& filename, TrajectoryInterpolation interpolation)
 {
     return LoadSampledOrbit(filename, interpolation, 0.0);
 }
@@ -911,9 +912,10 @@ Orbit* LoadSampledTrajectoryDoublePrec(const string& filename, TrajectoryInterpo
 
 /*! Load a trajectory file with single precision positions and velocities.
  */
-Orbit* LoadXYZVTrajectorySinglePrec(const string& filename, TrajectoryInterpolation interpolation)
+Orbit* LoadXYZVTrajectorySinglePrec(const fs::path& filename, TrajectoryInterpolation interpolation)
 {
-    Orbit* ret = LoadSampledOrbitXYZVBinary(filename + "bin", interpolation, 0.0f);
+    auto f = filename;
+    Orbit* ret = LoadSampledOrbitXYZVBinary(f += fs::path("bin"), interpolation, 0.0f); // FIXME
     if (ret != nullptr)
         return ret;
 
@@ -923,9 +925,10 @@ Orbit* LoadXYZVTrajectorySinglePrec(const string& filename, TrajectoryInterpolat
 
 /*! Load a trajectory file with double precision positions and velocities.
  */
-Orbit* LoadXYZVTrajectoryDoublePrec(const string& filename, TrajectoryInterpolation interpolation)
+Orbit* LoadXYZVTrajectoryDoublePrec(const fs::path& filename, TrajectoryInterpolation interpolation)
 {
-    Orbit* ret = LoadSampledOrbitXYZVBinary(filename + "bin", interpolation, 0.0);
+    auto f = filename;
+    Orbit* ret = LoadSampledOrbitXYZVBinary(f += fs::path("bin"), interpolation, 0.0); // FIXME
     if (ret != nullptr)
         return ret;
 

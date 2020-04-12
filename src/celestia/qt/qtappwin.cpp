@@ -10,9 +10,7 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#ifdef TARGET_OS_MAC
-#include <Carbon/Carbon.h>
-#endif
+
 #include <ctime>
 
 #include <QIcon>
@@ -40,9 +38,11 @@
 #include <QDesktopWidget>
 #include <QInputDialog>
 #include <QUrl>
+#include <QScreen>
 #include <vector>
 #include <string>
 #include <cassert>
+#include <celutil/gettext.h>
 #include "qtappwin.h"
 #include "qtglwidget.h"
 #include "qtpreferencesdialog.h"
@@ -64,7 +64,7 @@
 #if defined(_WIN32)
 #include "celestia/avicapture.h"
 // TODO: Add Mac support
-#elif !defined(TARGET_OS_MAC)
+#elif !defined(__APPLE__)
 #ifdef THEORA
 #include "celestia/oggtheoracapture.h"
 #endif
@@ -74,6 +74,7 @@
 #define CONFIG_DATA_DIR "./"
 #endif
 
+using namespace celestia;
 using namespace std;
 
 
@@ -85,12 +86,6 @@ const QPoint DEFAULT_MAIN_WINDOW_POSITION(20, 20);
 // Used when saving and restoring main window state; increment whenever
 // new dockables or toolbars are added.
 static const int CELESTIA_MAIN_WINDOW_VERSION = 12;
-
-
-// Terrible hack required because context menu callback doesn't retain
-// any state.
-static CelestiaAppWindow* MainWindowInstance = nullptr;
-static void ContextMenu(float x, float y, Selection sel);
 
 static int fps_to_ms(int fps) { return fps > 0 ? 1000 / fps : 0; }
 static int ms_to_fps(int ms) { return ms > 0? 1000 / ms : 0; }
@@ -141,13 +136,13 @@ class FPSActionGroup
     QActionGroup *m_actionGroup;
     std::map<int, QAction*> m_actions;
     QAction *m_customAction;
-    int m_lastFPS;
+    int m_lastFPS { 0 };
 public:
     FPSActionGroup(QObject *p = nullptr);
 
-    std::map<int, QAction*> &actions() { return m_actions; }
-    QAction *customAction() { return m_customAction; }
-    int lastFPS() { return m_lastFPS; }
+    const std::map<int, QAction*>& actions() const { return m_actions; }
+    QAction *customAction() const { return m_customAction; }
+    int lastFPS() const { return m_lastFPS; }
     void updateFPS(int);
 };
 
@@ -184,7 +179,8 @@ void FPSActionGroup::updateFPS(int fps)
 }
 
 CelestiaAppWindow::CelestiaAppWindow(QWidget* parent) :
-    QMainWindow(parent)
+    QMainWindow(parent),
+    CelestiaCore::ContextMenuHandler()
 {
     setObjectName("celestia-mainwin");
     timer = new QTimer(this);
@@ -203,7 +199,13 @@ void CelestiaAppWindow::init(const QString& qConfigFileName,
     QString celestia_data_dir = QString::fromLocal8Bit(::getenv("CELESTIA_DATA_DIR"));
 
     if (celestia_data_dir.isEmpty()) {
-        QString celestia_data_dir = CONFIG_DATA_DIR;
+#ifdef NATIVE_OSX_APP
+        // On macOS data directory is in a fixed position relative to the application bundle
+        QString dataDir = QApplication::applicationDirPath() + "/../Resources";
+#else
+        QString dataDir = CONFIG_DATA_DIR;
+#endif
+        QString celestia_data_dir = dataDir;
         QDir::setCurrent(celestia_data_dir);
     } else if (QDir(celestia_data_dir).isReadable()) {
         QDir::setCurrent(celestia_data_dir);
@@ -220,37 +222,9 @@ void CelestiaAppWindow::init(const QString& qConfigFileName,
         configFileName = qConfigFileName.toStdString();
 
     // Translate extras directories from QString -> std::string
-    vector<string> extrasDirectories;
+    vector<fs::path> extrasDirectories;
     for (const auto& dir : qExtrasDirectories)
         extrasDirectories.push_back(dir.toUtf8().data());
-
-#ifdef TARGET_OS_MAC
-    static short domains[] = { kUserDomain, kLocalDomain, kNetworkDomain };
-    int domain = 0;
-    int domainCount = (sizeof domains / sizeof(short));
-    QString resourceDir = QDir::currentPath();
-    while (!QDir::setCurrent(resourceDir+"/CelestiaResources") && domain < domainCount)
-    {
-        FSRef folder;
-        CFURLRef url;
-        UInt8 fullPath[PATH_MAX];
-        if (noErr == FSFindFolder(domains[domain++], kApplicationSupportFolderType, FALSE, &folder))
-        {
-            url = CFURLCreateFromFSRef(nil, &folder);
-            if (CFURLGetFileSystemRepresentation(url, TRUE, fullPath, PATH_MAX))
-                resourceDir = (const char *)fullPath;
-            CFRelease(url);
-        }
-    }
-
-    if (domain >= domainCount)
-    {
-        QMessageBox::critical(0, "Celestia",
-                              _("Celestia is unable to run because the CelestiaResources folder was not "
-                                 "found, probably due to improper installation."));
-        exit(1);
-    }
-#endif
 
     initAppDataDirectory();
 
@@ -284,16 +258,14 @@ void CelestiaAppWindow::init(const QString& qConfigFileName,
     glWidget = new CelestiaGlWidget(nullptr, "Celestia", m_appCore);
     glWidget->makeCurrent();
 
-    GLenum glewErr = glewInit();
-    if (glewErr != GLEW_OK)
+    if (!gl::init() || !gl::checkVersion(gl::GL_2_1))
     {
-        QMessageBox::critical(0, "Celestia",
-                              QString(_("Celestia was unable to initialize OpenGL extensions (error %1). Graphics quality will be reduced.")).arg(glewErr));
+        QMessageBox::critical(0, "Celestia", _("Celestia was unable to initialize OpenGL 2.1."));
+	exit(1);
     }
 
     m_appCore->setCursorHandler(glWidget);
-    m_appCore->setContextMenuCallback(ContextMenu);
-    MainWindowInstance = this; // TODO: Fix context menu callback
+    m_appCore->setContextMenuHandler(this);
 
     setCentralWidget(glWidget);
 
@@ -437,61 +409,28 @@ void CelestiaAppWindow::init(const QString& qConfigFileName,
  *  (such as bookmarks) which aren't stored in settings. The location
  *  of the data directory depends on the platform:
  *
- *  Win32: %APPDATA%\Celestia
- *  Mac OS X: $HOME/Library/Application Support/Celestia
- *  Unix and Mac OS X: $HOME/.config/Celestia
+ *  Win32: %LOCALAPPDATA%\Celestia
+ *  Mac OS X: ~/Library/Application Support/Celestia
+ *  Unix: $XDG_DATA_HOME/Celestia
+ *
+ *  We don't use AppDataLocation because it returns Qt-specific location,
+ *  e.g. "$XDG_DATA_HOME/Celestia Development Team/Celestia QT" while we
+ *  should keep it compatible between all frontends.
  */
+
 void CelestiaAppWindow::initAppDataDirectory()
 {
-#if defined(_WIN32)
-    // On Windows, the Celestia data directory is %APPDATA%\Celestia
-    // First, get the value of the APPDATA environment variable
-    QStringList envVars = QProcess::systemEnvironment();
-    QString appDataPath;
-    foreach (QString envVariable, envVars)
+    auto dir = QDir(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
+    m_dataDirPath = dir.filePath("Celestia");
+    if (!QDir(m_dataDirPath).exists())
     {
-        if (envVariable.startsWith("APPDATA"))
+        if (!dir.mkpath(m_dataDirPath))
         {
-            QStringList nameValue = envVariable.split("=");
-            if (nameValue.size() == 2)
-                appDataPath = nameValue[1];
-            break;
+            // If the doesn't exist even after we tried to create it,
+            // give up on trying to load user data from there.
+            m_dataDirPath = "";
         }
     }
-#elif defined(TARGET_OS_MAC)
-    QString appDataPath = QDir::home().filePath("Library/Application Support");
-#else
-    // UNIX
-    QString appDataPath = QDir::home().filePath(".config");
-#endif
-
-    if (appDataPath != "")
-    {
-        // Create a Celestia subdirectory of APPDATA if it doesn't already exist
-        QDir appDataDir(appDataPath);
-        if (appDataDir.exists())
-        {
-            m_dataDirPath = appDataDir.filePath("Celestia");
-            QDir celestiaDataDir(m_dataDirPath);
-            if (!celestiaDataDir.exists())
-            {
-                appDataDir.mkdir("Celestia");
-            }
-
-            // If the doesn't exist even after we tried to create it, give up
-            // on trying to load user data from there.
-            if (!celestiaDataDir.exists())
-            {
-                m_dataDirPath = "";
-            }
-        }
-    }
-#ifdef _DEBUG
-    else
-    {
-        QMessageBox::warning(this, "APPDIR missing", "APPDIR environment variable not found!");
-    }
-#endif
 }
 
 
@@ -509,10 +448,9 @@ void CelestiaAppWindow::readSettings()
     // Make sure that the saved size fits on screen; it's possible for the previous saved
     // position to be off-screen if the monitor settings have changed.
     bool onScreen = false;
-    for (int screenIndex = 0; screenIndex < desktop.numScreens(); screenIndex++)
+    foreach (const QScreen *screen, QGuiApplication::screens())
     {
-        QRect screenGeometry = desktop.screenGeometry(screenIndex);
-        if (screenGeometry.contains(windowPosition))
+        if (screen->geometry().contains(windowPosition))
             onScreen = true;
     }
 
@@ -565,7 +503,9 @@ void CelestiaAppWindow::writeSettings()
     settings.setValue("LabelMode", renderer->getLabelMode());
     settings.setValue("AmbientLightLevel", renderer->getAmbientLightLevel());
     settings.setValue("StarStyle", renderer->getStarStyle());
+#ifdef USE_GLCONTEXT
     settings.setValue("RenderPath", (int) renderer->getGLContext()->getRenderPath());
+#endif
     settings.setValue("TextureResolution", renderer->getResolution());
     ColorTableType colorsst;
     const ColorTemperatureTable* current = renderer->getStarColorTable();
@@ -583,9 +523,6 @@ void CelestiaAppWindow::writeSettings()
     settings.setValue("SyncTime", simulation->getSyncTime());
     settings.setValue("FramesVisible", m_appCore->getFramesVisible());
     settings.setValue("ActiveFrameVisible", m_appCore->getActiveFrameVisible());
-#ifdef VIDEO_SYNC
-    settings.setValue("VSync", m_appCore->getRenderer()->getVideoSync());
-#endif
 
     // TODO: This is not a reliable way determine when local time is enabled, but it's
     // all that CelestiaCore offers right now. useLocalTime won't ever be true when the system
@@ -691,7 +628,7 @@ void CelestiaAppWindow::slotGrabImage()
 void CelestiaAppWindow::slotCaptureVideo()
 {
 // TODO: Add Mac support
-#if defined(_WIN32) || (defined(THEORA) && !defined(TARGET_OS_MAC))
+#if defined(_WIN32) || (defined(THEORA) && !defined(__APPLE__))
     QString dir;
     QSettings settings;
     settings.beginGroup("Preferences");
@@ -765,9 +702,9 @@ void CelestiaAppWindow::slotCaptureVideo()
             float frameRate = frameRateCombo->itemData(frameRateCombo->currentIndex()).toFloat();
 
 #ifdef _WIN32
-            MovieCapture* movieCapture = new AVICapture();
+            MovieCapture* movieCapture = new AVICapture(m_appCore->getRenderer());
 #else
-            MovieCapture* movieCapture = new OggTheoraCapture();
+            MovieCapture* movieCapture = new OggTheoraCapture(m_appCore->getRenderer());
             movieCapture->setAspectRatio(1, 1);
 #endif
             bool ok = movieCapture->start(saveAsName.toLatin1().data(),
@@ -803,7 +740,7 @@ void CelestiaAppWindow::slotCopyURL()
 
     Url url(appState, Url::CurrentVersion);
     QApplication::clipboard()->setText(url.getAsString().c_str());
-    m_appCore->flash(QString(_("Copied URL")).toStdString());
+    m_appCore->flash(_("Copied URL"));
 }
 
 
@@ -812,8 +749,8 @@ void CelestiaAppWindow::slotPasteURL()
     QString urlText = QApplication::clipboard()->text();
     if (!urlText.isEmpty())
     {
-        m_appCore->goToUrl(urlText.toStdString());
-        m_appCore->flash(QString(_("Pasting URL")).toStdString());
+        if (m_appCore->goToUrl(urlText.toStdString()))
+            m_appCore->flash(_("Pasting URL"));
     }
 }
 
@@ -1052,35 +989,63 @@ void CelestiaAppWindow::slotBookmarkTriggered(const QString& url)
 
 void CelestiaAppWindow::slotManual()
 {
+#if 0
     QString MANUAL_FILE = "CelestiaGuide.html";
     QDesktopServices::openUrl(QUrl(QUrl::fromLocalFile(QDir::toNativeSeparators(QApplication::applicationDirPath()) + QDir::toNativeSeparators(QDir::separator()) + "help" + QDir::toNativeSeparators(QDir::separator()) + MANUAL_FILE)));
-//    QMessageBox::information(
-//         QApplication::activeWindow(),
-//         QApplication::applicationName(),
-//         QDir::toNativeSeparators(QApplication::applicationDirPath()) + QDir::toNativeSeparators(QDir::separator()) + "help" + QDir::toNativeSeparators(QDir::separator()) + MANUAL_FILE
-//        );
+#else
+    QDesktopServices::openUrl(QUrl("https://en.wikibooks.org/wiki/Celestia"));
+#endif
 }
 
 
 void CelestiaAppWindow::slotShowAbout()
 {
-    static const char* aboutText =
-    gettext_noop("<html>"
-    "<p><b>Celestia 1.7.0 (Qt5 beta version, git commit %1)</b></p>"
-    "<p>Copyright (C) 2001-2018 by the Celestia Development Team. Celestia "
-    "is free software. You can redistribute it and/or modify it under the "
-    "terms of the GNU General Public License version&nbsp;2.</p>"
-    "<b>Celestia on the web</b>"
-    "<br>"
-    "Main site: <a href=\"https://celestia.space/\">"
-    "https://celestia.space/</a><br>"
-    "Forum: <a href=\"https://celestia.space/forum/\">"
-    "https://celestia.space/forum/</a><br>"
-    "GitHub project: <a href=\"https://github.com/CelestiaProject/Celestia\">"
-    "https://github.com/CelestiaProject/Celestia</a><br>"
-    "</html>");
+    const char* aboutText = gettext_noop(
+        "<html>"
+        "<h1>Celestia 1.7</h1>"
+        "<p>Development snapshot, commit <b>%1</b>.</p>"
 
-    QMessageBox::about(this, "Celestia", QString(_(aboutText)).arg(GIT_COMMIT));
+        "<p>Built for %2 bit CPU<br>"
+        "Using %3 %4<br>"
+        "Built against Qt library: %5<br>"
+        "NAIF kerners are %7<br>"
+        "Runtime Qt version: %6</p>"
+
+        "<p>Copyright (C) 2001-2020 by the Celestia Development Team.<br>"
+        "Celestia is free software. You can redistribute it and/or modify "
+        "it under the terms of the GNU General Public License as published "
+        "by the Free Software Foundation; either version 2 of the License, "
+        "or (at your option) any later version.</p>"
+
+        "<p>Main site: <a href=\"https://celestia.space/\">"
+        "https://celestia.space/</a><br>"
+        "Forum: <a href=\"https://celestia.space/forum/\">"
+        "https://celestia.space/forum/</a><br>"
+        "GitHub project: <a href=\"https://github.com/CelestiaProject/Celestia\">"
+        "https://github.com/CelestiaProject/Celestia</a></p>"
+        "</html>"
+    );
+
+    auto qAboutText = QString(_(aboutText))
+                                .arg(GIT_COMMIT)
+                                .arg(QSysInfo::WordSize)
+#if defined(_MSC_VER)
+                                .arg("MSVC").arg(_MSC_FULL_VER)
+#elif defined(__clang_version__)
+                                .arg("Clang").arg(__clang_version__)
+#elif defined(__GNUC__)
+                                .arg("GNU GCC").arg(__VERSION__)
+#else
+                                .arg(_("Unknown compiler")).arg("")
+#endif
+                                .arg(QT_VERSION_STR, qVersion())
+#if defined(USE_SPICE)
+                                .arg(_("supported"))
+#else
+                                .arg(_("not supported"))
+#endif
+    ;
+        QMessageBox::about(this, _("About Celestia"), qAboutText);
 }
 
 
@@ -1091,52 +1056,89 @@ void CelestiaAppWindow::slotShowGLInfo()
     QString infoText;
     QTextStream out(&infoText, QIODevice::WriteOnly);
 
+    map<string, string> info;
+    m_appCore->getRenderer()->getInfo(info);
+
     // Get the version string
     // QTextStream::operator<<(const char *string) assumes that the string has
     // ISO-8859-1 encoding, so we need to convert in to QString
-    out << QString(_("<b>OpenGL version: </b>"));
-    const char* version = reinterpret_cast<const char*>(glGetString(GL_VERSION));
-    if (version != nullptr)
-        out << version;
-    else
-        out << "???";
-    out << "<br>\n";
-
-    out << QString(_("<b>Renderer: </b>"));
-    const char* glrenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
-    if (glrenderer != nullptr)
-        out << glrenderer;
-    out << "<br>\n";
-
-    // shading language version
-    const char* glslversion = reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION));
-    if (glslversion != nullptr)
+    if (info.count("API") > 0 && info.count("APIVersion") > 0)
     {
-        out << QString(_("<b>GLSL Version: </b>")) << glslversion << "<br>\n";
+        out << QString(_("<b>%1 version:</b> %2")).arg(info["API"].c_str(), info["APIVersion"].c_str());
+        out << "<br>\n";
     }
 
-    // texture size
-    GLint maxTextureSize = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
-    out << QString(_("<b>Maximum texture size: </b>")) << maxTextureSize << "<br>\n";
+    if (info.count("Vendor") > 0)
+    {
+        out << QString(_("<b>Vendor</b>: %1")).arg(info["Vendor"].c_str());
+        out << "<br>\n";
+    }
+
+    if (info.count("Renderer") > 0)
+    {
+        out << QString(_("<b>Renderer:</b> %1")).arg(info["Renderer"].c_str());
+        out << "<br>\n";
+    }
+
+    // shading language version
+    if (info.count("Language") > 0)
+    {
+        out << QString(_("<b>%1 Version:</b> %2")).arg(info["Language"].c_str(), info["LanguageVersion"].c_str());
+        out << "<br>\n";
+    }
+
+    // textures
+    if (info.count("MaxTextureUnits") > 0)
+    {
+        out << QString(_("<b>Max simultaneous textures:</b> %1")).arg(info["MaxTextureUnits"].c_str());
+        out << "<br>\n";
+    }
+
+    if (info.count("MaxTextureSize") > 0)
+    {
+        out << QString(_("<b>Maximum texture size:</b> %1")).arg(info["MaxTextureSize"].c_str());
+        out << "<br>\n";
+    }
+
+    if (info.count("PointSizeMax") > 0 && info.count("PointSizeMin") > 0)
+    {
+        out << QString(_("<b>Point size range</b>: %1 - %2")).arg(info["PointSizeMin"].c_str(), info["PointSizeMax"].c_str());
+        out << "<br>\n";
+    }
+
+    if (info.count("PointSizeGran") > 0)
+    {
+        out << QString(_("<b>Point size granularity</b>: %1")).arg(info["PointSizeGran"].c_str());
+        out << "<br>\n";
+    }
+
+    if (info.count("MaxCubeMapSize") > 0)
+    {
+        out << QString(_("<b>Max cube map size</b>: %1")).arg(info["MaxCubeMapSize"].c_str());
+        out << "<br>\n";
+    }
+
 
     out << "<br>\n";
 
     // Show all supported extensions
-    out << QString(_("<b>Extensions:</b><br>\n"));
-    const char *extensions = reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
-    if (extensions != nullptr)
+    if (info.count("Extensions") > 0)
     {
-        QStringList extList = QString(extensions).split(" ");
-        foreach(QString s, extList)
+        out << QString(_("<b>Supported extensions:</b><br>\n"));
+        auto ext = info["Extensions"];
+        string::size_type old = 0, pos = ext.find(' ');
+        while (pos != string::npos)
         {
-            out << s << "<br>\n";
+            out << ext.substr(old, pos - old).c_str() << "<br>\n";
+            old = pos + 1;
+            pos = ext.find(' ', old);
         }
+        out << ext.substr(old).c_str();
     }
 
     QDialog glInfo(this);
 
-    glInfo.setWindowTitle(_("OpenGL Info"));
+    glInfo.setWindowTitle(_("Renderer Info"));
 
     QVBoxLayout* layout = new QVBoxLayout(&glInfo);
     QTextEdit* textEdit = new QTextEdit(infoText, &glInfo);
@@ -1171,7 +1173,7 @@ void CelestiaAppWindow::createMenus()
     QAction* captureVideoAction = new QAction(QIcon(":/icons/capture-video.png"),
                                               _("Capture &video"), this);
     // TODO: Add Mac support for video capture
-#if defined(TARGET_OS_MAC) || (!defined(_WIN32) && !defined(THEORA))
+#if defined(__APPLE__) || (!defined(_WIN32) && !defined(THEORA))
     captureVideoAction->setEnabled(false);
 #endif
     captureVideoAction->setShortcut(QString(_("Shift+F10")));
@@ -1182,16 +1184,6 @@ void CelestiaAppWindow::createMenus()
     copyImageAction->setShortcut(QString(_("Ctrl+Shift+C")));
     connect(copyImageAction, SIGNAL(triggered()), this, SLOT(slotCopyImage()));
     fileMenu->addAction(copyImageAction);
-
-    QAction* copyURLAction = new QAction(QIcon(":/icons/clip_copy.png"), _("Copy &URL"), this);
-    copyURLAction->setShortcut(QKeySequence::Copy);
-    connect(copyURLAction, SIGNAL(triggered()), this, SLOT(slotCopyURL()));
-    fileMenu->addAction(copyURLAction);
-
-    QAction* pasteURLAction = new QAction(QIcon(":/icons/clip_paste.png"), _("&Paste URL"), this);
-    //pasteURLAction->setShortcut(QKeySequence::Paste);  // conflicts with cycle render path command
-    connect(pasteURLAction, SIGNAL(triggered()), this, SLOT(slotPasteURL()));
-    fileMenu->addAction(pasteURLAction);
 
     fileMenu->addSeparator();
 
@@ -1233,6 +1225,16 @@ void CelestiaAppWindow::createMenus()
     QAction* gotoObjAct = new QAction(QIcon(":/icons/go-jump.png"), _("Goto Object..."), this);
     connect(gotoObjAct, SIGNAL(triggered()), this, SLOT(gotoObject()));
     navMenu->addAction(gotoObjAct);
+
+    QAction *copyAction = new QAction(QIcon(":/icons/clip_copy.png"), _("Copy URL / console text"), this);
+    copyAction->setShortcut(QString("Ctrl+C"));
+    connect(copyAction, &QAction::triggered, this, &CelestiaAppWindow::copyTextOrURL);
+    navMenu->addAction(copyAction);
+
+    QAction *pasteAction = new QAction(QIcon(":/icons/clip_paste.png"), _("Paste URL / console text"), this);
+    pasteAction->setShortcut(QString("Ctrl+V"));
+    connect(pasteAction, &QAction::triggered, this, &CelestiaAppWindow::pasteTextOrURL);
+    navMenu->addAction(pasteAction);
 
     /****** Time menu ******/
     timeMenu = menuBar()->addMenu(_("&Time"));
@@ -1346,18 +1348,6 @@ void CelestiaAppWindow::createMenus()
     bool check;
     QSettings settings;
     settings.beginGroup("Preferences");
-#ifdef VIDEO_SYNC
-    if (settings.contains("VSync"))
-    {
-        check = settings.value("VSync").toBool();
-    }
-    else
-    {
-        check = m_appCore->getRenderer()->getVideoSync();
-    }
-    actions->toggleVSyncAction->setChecked(check);
-    m_appCore->getRenderer()->setVideoSync(check);
-#endif
 
     if (settings.contains("FramesVisible"))
     {
@@ -1403,49 +1393,15 @@ void CelestiaAppWindow::createMenus()
     m_appCore->getSimulation()->setSyncTime(check);
 
     // Set up the default time zone name and offset from UTC
-    time_t curtime = time(nullptr);
-    m_appCore->start(astro::UTCtoTDB((double) curtime / 86400.0 + (double) astro::Date(1970, 1, 1)));
+    m_appCore->start();
 
-#ifndef _WIN32
-    struct tm result;
-    if (localtime_r(&curtime, &result))
+    string tzName;
+    int dstBias;
+    if (GetTZInfo(tzName, dstBias))
     {
-        m_appCore->setTimeZoneBias(result.tm_gmtoff);
-        m_appCore->setTimeZoneName(result.tm_zone);
+        m_appCore->setTimeZoneName(tzName);
+        m_appCore->setTimeZoneBias(dstBias);
     }
-#else
-    TIME_ZONE_INFORMATION tzi;
-    DWORD dst = GetTimeZoneInformation(&tzi);
-    if (dst != TIME_ZONE_ID_INVALID)
-    {
-        LONG dstBias = 0;
-        WCHAR* tzName = nullptr;
-
-        if (dst == TIME_ZONE_ID_STANDARD)
-        {
-            dstBias = tzi.StandardBias;
-            tzName = tzi.StandardName;
-        }
-        else if (dst == TIME_ZONE_ID_DAYLIGHT)
-        {
-            dstBias = tzi.DaylightBias;
-            tzName = tzi.DaylightName;
-        }
-
-        if (tzName == nullptr)
-        {
-            m_appCore->setTimeZoneName("   ");
-        }
-        else
-        {
-            char tz_name_out[20];
-            size_t length = wcstombs(tz_name_out, tzName, sizeof(tz_name_out)-1);
-            tz_name_out[std::min(sizeof(tz_name_out)-1, length)] = '\0';
-            m_appCore->setTimeZoneName(tz_name_out);
-        }
-        m_appCore->setTimeZoneBias((tzi.Bias + dstBias) * -60);
-    }
-#endif
 
     // If LocalTime is set to false, set the time zone bias to zero.
     if (settings.contains("LocalTime"))
@@ -1540,7 +1496,7 @@ void CelestiaAppWindow::setCustomFPS()
         fpsActions->updateFPS(fpsActions->lastFPS());
 }
 
-void CelestiaAppWindow::contextMenu(float x, float y, Selection sel)
+void CelestiaAppWindow::requestContextMenu(float x, float y, Selection sel)
 {
     SelectionPopup* menu = new SelectionPopup(sel, m_appCore, this);
     connect(menu, SIGNAL(selectionInfoRequested(Selection&)),
@@ -1567,7 +1523,7 @@ QMenu* CelestiaAppWindow::buildScriptsMenu()
     for (const auto& script : *scripts)
     {
         QAction* act = new QAction(script.title.c_str(), this);
-        act->setData(script.filename.c_str());
+        act->setData(script.filename.string().c_str());
         connect(act, SIGNAL(triggered()), this, SLOT(slotOpenScript()));
         menu->addAction(act);
     }
@@ -1575,8 +1531,32 @@ QMenu* CelestiaAppWindow::buildScriptsMenu()
     return menu;
 }
 
-
-void ContextMenu(float x, float y, Selection sel)
+void CelestiaAppWindow::copyText()
 {
-    MainWindowInstance->contextMenu(x, y, sel);
+    QString text(m_appCore->getTypedText().c_str());
+    if (!text.isEmpty())
+        QGuiApplication::clipboard()->setText(text);
+}
+
+void CelestiaAppWindow::pasteText()
+{
+    QString text = QGuiApplication::clipboard()->text();
+    if (!text.isEmpty())
+        m_appCore->setTypedText(text.toUtf8().data());
+}
+
+void CelestiaAppWindow::copyTextOrURL()
+{
+    if (m_appCore->getTextEnterMode()) // True when the search console is opened
+        copyText();
+    else
+        slotCopyURL();
+}
+
+void CelestiaAppWindow::pasteTextOrURL()
+{
+    if (m_appCore->getTextEnterMode()) // True when the search console is opened
+        pasteText();
+    else
+        slotPasteURL();
 }

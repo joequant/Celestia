@@ -26,6 +26,7 @@
 using namespace cmod;
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 string inputFilename;
 string outputFilename;
@@ -78,7 +79,7 @@ struct Face
 };
 
 
-class VertexComparator : public std::binary_function<Vertex, Vertex, bool>
+class VertexComparator
 {
 public:
     virtual bool compare(const Vertex& a, const Vertex& b) const = 0;
@@ -374,14 +375,14 @@ bool operator<(const Mesh::VertexDescription& a,
 
     if (a.nAttributes < b.nAttributes)
         return true;
-    if (b.nAttributes < b.nAttributes)
+    if (b.nAttributes < a.nAttributes)
         return false;
 
     for (uint32_t i = 0; i < a.nAttributes; i++)
     {
         if (a.attributes[i] < b.attributes[i])
             return true;
-        else if (b.attributes[i] < a.attributes[i])
+        if (b.attributes[i] < a.attributes[i])
             return false;
     }
 
@@ -389,19 +390,12 @@ bool operator<(const Mesh::VertexDescription& a,
 }
 
 
-class MeshVertexDescComparator :
-    public std::binary_function<const Mesh*, const Mesh*, bool>
+struct MeshVertexDescComparator
 {
-public:
-    MeshVertexDescComparator() = default;
-
     bool operator()(const Mesh* a, const Mesh* b) const
     {
         return a->getVertexDescription() < b->getVertexDescription();
     }
-
-private:
-    int ignore;
 };
 
 
@@ -1029,6 +1023,8 @@ generateTangents(Mesh& mesh,
                     f++;
                 }
             }
+            break;
+        default:
             break;
         }
     }

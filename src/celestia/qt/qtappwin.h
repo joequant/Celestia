@@ -32,7 +32,7 @@ class BookmarkManager;
 class BookmarkToolBar;
 class QUrl;
 
-class CelestiaAppWindow : public QMainWindow
+class CelestiaAppWindow : public QMainWindow, public CelestiaCore::ContextMenuHandler
 {
  Q_OBJECT
 
@@ -48,7 +48,7 @@ class CelestiaAppWindow : public QMainWindow
     bool loadBookmarks();
     void saveBookmarks();
 
-    void contextMenu(float x, float y, Selection sel);
+    void requestContextMenu(float x, float y, Selection sel);
 
     void loadingProgressUpdate(const QString& s);
 
@@ -100,6 +100,12 @@ class CelestiaAppWindow : public QMainWindow
     void slotBookmarkTriggered(const QString& url);
 
     void handleCelUrl(const QUrl& url);
+
+    void copyText();
+    void pasteText();
+
+    void copyTextOrURL();
+    void pasteTextOrURL();
 
  signals:
     void progressUpdate(const QString& s, int align, const QColor& c);

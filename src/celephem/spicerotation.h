@@ -14,9 +14,9 @@
 #define _CELENGINE_SPICEROTATION_H_
 
 #include "rotation.h"
-#include <celmath/quaternion.h>
 #include <string>
 #include <list>
+#include <celcompat/filesystem.h>
 
 class SpiceRotation : public CachingRotationModel
 {
@@ -31,7 +31,7 @@ class SpiceRotation : public CachingRotationModel
                   double period);
     virtual ~SpiceRotation() = default;
 
-    bool init(const std::string& path,
+    bool init(const fs::path& path,
               const std::list<std::string>* requiredKernels);
 
     bool isPeriodic() const;

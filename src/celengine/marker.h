@@ -14,7 +14,9 @@
 #include <string>
 #include <celutil/color.h>
 #include <celengine/selection.h>
+#include <celutil/debug.h>
 
+class Renderer;
 
 class MarkerRepresentation
 {
@@ -59,7 +61,7 @@ public:
     string label() const { return m_label; }
     void setLabel(const std::string&);
 
-    void render(float size) const;
+    void render(Renderer& r, float size) const;
 
 private:
     Symbol m_symbol;
@@ -103,7 +105,7 @@ class Marker
     MarkerRepresentation& representation() { return m_representation; }
     void setRepresentation(const MarkerRepresentation& rep);
 
-    void render(float size) const;
+    void render(Renderer& r, float size) const;
 
  private:
     Selection m_object;

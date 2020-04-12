@@ -10,7 +10,7 @@
 // of the License, or (at your option) any later version.
 
 #include "winsplash.h"
-#include <celutil/util.h>
+#include <celutil/gettext.h>
 #include <celutil/winutil.h>
 #include <string>
 #include <winuser.h>
@@ -224,7 +224,7 @@ SplashWindow::createWindow()
 
     int x = (nScrWidth  - winWidth) / 2;
     int y = (nScrHeight - winHeight) / 2;
-    hwnd = ::CreateWindowEx(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, className,
+    hwnd = ::CreateWindowEx(WS_EX_TOOLWINDOW, className,
                             TEXT("Banner"), WS_POPUP, x, y,
                             winWidth, winHeight, NULL, NULL, NULL, this);
 

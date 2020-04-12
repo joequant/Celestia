@@ -10,7 +10,7 @@
 
 #include <algorithm>
 #include <cstdio>
-#include "celestia.h"
+#include <config.h>
 #include <cassert>
 #include "astro.h"
 #include "deepskyobj.h"
@@ -25,12 +25,7 @@
 
 using namespace Eigen;
 using namespace std;
-
-
-void DeepSkyObject::setCatalogNumber(uint32_t n)
-{
-    catalogNumber = n;
-}
+using namespace celmath;
 
 Vector3d DeepSkyObject::getPosition() const
 {
@@ -151,7 +146,7 @@ void DeepSkyObject::hsv2rgb( float *r, float *g, float *b, float h, float s, flo
     }
 }
 
-bool DeepSkyObject::load(AssociativeArray* params, const string& resPath)
+bool DeepSkyObject::load(AssociativeArray* params, const fs::path& resPath)
 {
     // Get position
     Vector3d position(Vector3d::Zero());
@@ -179,12 +174,6 @@ bool DeepSkyObject::load(AssociativeArray* params, const string& resPath)
     params->getAngle("Angle", angle);
 
     setOrientation(Quaternionf(AngleAxisf((float) degToRad(angle), axis.cast<float>().normalized())));
-#ifdef CELVEC
-    Quatf q(1);
-    q.setAxisAngle(Vec3f((float) axis.x, (float) axis.y, (float) axis.z),
-                   (float) degToRad(angle));
-    setOrientation(toEigen(q));
-#endif
 
     double radius = 1.0;
     params->getLength("Radius", radius, KM_PER_LY);
@@ -195,18 +184,18 @@ bool DeepSkyObject::load(AssociativeArray* params, const string& resPath)
     if (params->getNumber("AbsMag", absMag))
         setAbsoluteMagnitude((float) absMag);
 
-    string infoURL;
+    string infoURL; // FIXME: infourl class
     if (params->getString("InfoURL", infoURL))
     {
         if (infoURL.find(':') == string::npos)
         {
             // Relative URL, the base directory is the current one,
             // not the main installation directory
-            if (resPath[1] == ':')
+            if (resPath.c_str()[1] == ':')
                 // Absolute Windows path, file:/// is required
-                infoURL = "file:///" + resPath + "/" + infoURL;
+                infoURL = "file:///" + resPath.string() + "/" + infoURL;
             else if (!resPath.empty())
-                infoURL = resPath + "/" + infoURL;
+                infoURL = resPath.string() + "/" + infoURL;
         }
         setInfoURL(infoURL);
     }

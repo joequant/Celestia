@@ -24,6 +24,7 @@
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 struct OrientationSample
 {
@@ -217,9 +218,9 @@ SampledOrientation::getOrientation(double tjd) const
 }
 
 
-RotationModel* LoadSampledOrientation(const string& filename)
+RotationModel* LoadSampledOrientation(const fs::path& filename)
 {
-    ifstream in(filename);
+    ifstream in(filename.string());
     if (!in.good())
         return nullptr;
 

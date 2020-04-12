@@ -57,9 +57,7 @@
 # define _FILE_OFFSET_BITS 64
 #endif
 
-#ifdef HAVE_CONFIG_H
-# include <config.h>
-#endif
+#include <config.h>
 
 #ifndef _REENTRANT
 # define _REENTRANT
@@ -68,10 +66,8 @@
 #include <cstdlib>
 #include <cmath>
 #include <celutil/debug.h>
-#include <celutil/util.h>
-#include <GL/glew.h>
+#include <celutil/gettext.h>
 #include <string>
-#include <fmt/printf.h>
 #include <theora/theora.h>
 
 using namespace std;
@@ -86,7 +82,8 @@ using namespace std;
 //  {"framerate-denominator",optional_argument,nullptr,'F'},
 
 
-OggTheoraCapture::OggTheoraCapture():
+OggTheoraCapture::OggTheoraCapture(const Renderer *r):
+    MovieCapture(r),
     video_x(0),
     video_y(0),
     frame_x(0),
@@ -161,7 +158,7 @@ bool OggTheoraCapture::start(const std::string& filename,
     outfile = fopen(filename.c_str(), "wb");
     if (!outfile)
     {
-        DPRINTF(0, _("Error in creating ogg file %s for capture.\n"), filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, _("Error in creating ogg file %s for capture.\n"), filename.c_str());
         return false;
     }
     /* Set up Ogg output stream */
@@ -310,13 +307,14 @@ bool OggTheoraCapture::start(const std::string& filename,
     yuv.uv_height=video_y/2;
     yuv.uv_stride=video_x/2;
 
-    fmt::printf(_("OggTheoraCapture::start() - Theora video: %s %.2f(%d/%d) fps quality %d %dx%d offset (%dx%d)\n"),
-                filename.c_str(),
-                (double)video_hzn/(double)video_hzd,
-                video_hzn,video_hzd,
-                video_q,
-                video_x,video_y,
-                frame_x_offset,frame_y_offset);
+    DPRINTF(LOG_LEVEL_VERBOSE,
+            _("OggTheoraCapture::start() - Theora video: %s %.2f(%d/%d) fps quality %d %dx%d offset (%dx%d)\n"),
+            filename.c_str(),
+            (double)video_hzn/(double)video_hzd,
+            video_hzn,video_hzd,
+            video_q,
+            video_x,video_y,
+            frame_x_offset,frame_y_offset);
 
     capturing = true;
     return true;
@@ -337,14 +335,14 @@ bool OggTheoraCapture::captureFrame()
     if(ogg_stream_eos(&to)) return false;
 
     // Get the dimensions of the current viewport
-    int viewport[4];
-    glGetIntegerv(GL_VIEWPORT, viewport);
+    int x, y, w, h;
+    renderer->getViewport(&x, &y, &w, &h);
 
-    int x = viewport[0] + (viewport[2] - frame_x) / 2;
-    int y = viewport[1] + (viewport[3] - frame_y) / 2;
-    glReadPixels(x, y, frame_x, frame_y,
-             GL_RGB, GL_UNSIGNED_BYTE,
-             pixels);
+    x += (w - frame_x) / 2;
+    y += (h - frame_y) / 2;
+    renderer->captureFrame(x, y, frame_x, frame_y,
+                           Renderer::PixelFormat::RGB,
+                           pixels);
 
     unsigned char *ybase = yuvframe[0];
     unsigned char *ubase = yuvframe[0]+ video_x*video_y;
@@ -410,7 +408,7 @@ bool OggTheoraCapture::captureFrame()
     }
     video_frame_count += 1;
     //if ((video_frame_count % 10) == 0)
-    //    fmt::printf("Writing frame %d\n", video_frame_count);
+    //    DPRINTF(LOG_LEVEL_VERBOSE, "Writing frame %d\n", video_frame_count);
     unsigned char *temp = yuvframe[0];
     yuvframe[0] = yuvframe[1];
     yuvframe[1] = temp;
@@ -425,7 +423,7 @@ void OggTheoraCapture::cleanup()
 
     if(outfile)
     {
-        fmt::printf(_("OggTheoraCapture::cleanup() - wrote %d frames\n"), video_frame_count);
+        DPRINTF(LOG_LEVEL_VERBOSE, _("OggTheoraCapture::cleanup() - wrote %d frames\n"), video_frame_count);
         if (video_frame_count > 0)
         {
             yuv.y= yuvframe[1];

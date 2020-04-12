@@ -7,7 +7,7 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include <GL/glew.h>
+#include "glsupport.h"
 #include "materialwidget.h"
 #include <celmodel/material.h>
 #include <QGridLayout>
@@ -282,28 +282,28 @@ MaterialWidget::changeMaterialParameters()
     m_material.maps[Material::DiffuseMap] = 0;
     if (!m_baseTexture->itemData(m_baseTexture->currentIndex()).isNull())
     {
-        m_material.maps[Material::DiffuseMap] = new Material::DefaultTextureResource(m_baseTexture->currentText().toAscii().data());
+        m_material.maps[Material::DiffuseMap] = new Material::DefaultTextureResource(m_baseTexture->currentText().toStdString());
     }
 
     delete m_material.maps[Material::SpecularMap];
     m_material.maps[Material::SpecularMap] = 0;
     if (!m_specularMap->itemData(m_specularMap->currentIndex()).isNull())
     {
-        m_material.maps[Material::SpecularMap] = new Material::DefaultTextureResource(m_specularMap->currentText().toAscii().data());
+        m_material.maps[Material::SpecularMap] = new Material::DefaultTextureResource(m_specularMap->currentText().toStdString());
     }
 
     delete m_material.maps[Material::NormalMap];
     m_material.maps[Material::NormalMap] = 0;
     if (!m_normalMap->itemData(m_normalMap->currentIndex()).isNull())
     {
-        m_material.maps[Material::NormalMap] = new Material::DefaultTextureResource(m_normalMap->currentText().toAscii().data());
+        m_material.maps[Material::NormalMap] = new Material::DefaultTextureResource(m_normalMap->currentText().toStdString());
     }
 
     delete m_material.maps[Material::EmissiveMap];
     m_material.maps[Material::EmissiveMap] = 0;
     if (!m_emissiveMap->itemData(m_emissiveMap->currentIndex()).isNull())
     {
-        m_material.maps[Material::EmissiveMap] = new Material::DefaultTextureResource(m_emissiveMap->currentText().toAscii().data());
+        m_material.maps[Material::EmissiveMap] = new Material::DefaultTextureResource(m_emissiveMap->currentText().toStdString());
     }
 
     emit materialEdited(m_material);
@@ -317,7 +317,11 @@ static QSet<QString> listTextures(QDir& dir)
     filters << "*.png" << "*.jpg" << "*.dds" << "*.dxt5nm";
     QStringList textureFileNames = dir.entryList(filters, QDir::Files);
 
+#if QT_VERSION >= QT_VERSION_CHECK(5, 14, 0)
+    return QSet<QString>(textureFileNames.begin(), textureFileNames.end());
+#else
     return QSet<QString>::fromList(textureFileNames);
+#endif
 }
 
 void

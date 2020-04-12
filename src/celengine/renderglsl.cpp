@@ -2,7 +2,7 @@
 //
 // Functions for rendering objects using dynamically generated GLSL shaders.
 //
-// Copyright (C) 2006-2009, the Celestia Development Team
+// Copyright (C) 2006-2020, the Celestia Development Team
 // Original version by Chris Laurel <claurel@gmail.com>
 //
 // This program is free software; you can redistribute it and/or
@@ -10,31 +10,24 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include <algorithm>
-#include <cassert>
-
-#ifndef _WIN32
-#ifndef TARGET_OS_MAC
 #include <config.h>
-#endif
-#endif /* _WIN32 */
-
-#include "render.h"
-#include "astro.h"
-#include "glshader.h"
-#include "shadermanager.h"
-#include "spheremesh.h"
-#include "lodspheremesh.h"
+#include <algorithm>
+#include <memory>
+#include "framebuffer.h"
 #include "geometry.h"
-#include "texmanager.h"
+#include "lodspheremesh.h"
 #include "meshmanager.h"
+#include "modelgeometry.h"
+#include "render.h"
 #include "renderinfo.h"
 #include "renderglsl.h"
-#include "modelgeometry.h"
+#include "shadermanager.h"
+#include "texmanager.h"
 #include "vecgl.h"
-#include <celutil/debug.h>
+#include <celengine/astro.h>
 #include <celmath/frustum.h>
 #include <celmath/distance.h>
+#include <celmath/geomutil.h>
 #include <celmath/intersect.h>
 #include <celutil/utf8.h>
 #include <celutil/util.h>
@@ -42,10 +35,30 @@
 using namespace cmod;
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
+#ifndef GL_ONLY_SHADOWS
+#define GL_ONLY_SHADOWS 1
+#endif
 
 const double AtmosphereExtinctionThreshold = 0.05;
 
+static
+void renderGeometryShadow_GLSL(Geometry* geometry,
+                               FramebufferObject* shadowFbo,
+                               const RenderInfo& ri,
+                               const LightingState& ls,
+                               int lightIndex,
+                               float geometryScale,
+                               const Quaternionf& planetOrientation,
+                               double tsec,
+                               const Renderer* renderer,
+                               Eigen::Matrix4f *lightMatrix);
+
+static
+Matrix4f directionalLightMatrix(const Vector3f& lightDirection);
+static
+Matrix4f shadowProjectionMatrix(float objectRadius);
 
 // Render a planet sphere with GLSL shaders
 void renderEllipsoid_GLSL(const RenderInfo& ri,
@@ -64,8 +77,6 @@ void renderEllipsoid_GLSL(const RenderInfo& ri,
     Texture* textures[MAX_SPHERE_MESH_TEXTURES] =
         { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
     unsigned int nTextures = 0;
-
-    glDisable(GL_LIGHTING);
 
     ShaderProperties shadprop;
     shadprop.nLights = min(ls.nLights, MaxShaderLights);
@@ -274,8 +285,6 @@ void renderEllipsoid_GLSL(const RenderInfo& ri,
     if (shadprop.hasEclipseShadows() != 0)
         prog->setEclipseShadowParameters(ls, semiAxes, planetOrientation);
 
-    glColor(ri.color);
-
     unsigned int attributes = LODSphereMesh::Normals;
     if (ri.bumpTex != nullptr)
         attributes |= LODSphereMesh::Tangents;
@@ -286,6 +295,8 @@ void renderEllipsoid_GLSL(const RenderInfo& ri,
     glUseProgram(0);
 }
 
+
+#undef DEPTH_BUFFER_DEBUG
 
 /*! Render a mesh object
  *  Parameters:
@@ -302,13 +313,87 @@ void renderGeometry_GLSL(Geometry* geometry,
                          double tsec,
                          const Renderer* renderer)
 {
-    glDisable(GL_LIGHTING);
+    auto *shadowBuffer = renderer->getShadowFBO(0);
+    Matrix4f lightMatrix(Matrix4f::Identity());
+
+    if (shadowBuffer != nullptr && shadowBuffer->isValid())
+    {
+        std::array<int, 4> viewport;
+        renderer->getViewport(viewport);
+
+        // Save current GL state to avoid depth rendering bugs
+        glPushAttrib(GL_TRANSFORM_BIT);
+        float range[2];
+        glGetFloatv(GL_DEPTH_RANGE, range);
+        glDepthRange(0.0f, 1.0f);
+
+#ifdef DEPTH_STATE_DEBUG
+        float bias, bits, clear, range[2], scale;
+        glGetFloatv(GL_DEPTH_BIAS, &bias);
+        glGetFloatv(GL_DEPTH_BITS, &bits);
+        glGetFloatv(GL_DEPTH_CLEAR_VALUE, &clear);
+        glGetFloatv(GL_DEPTH_RANGE, range);
+        glGetFloatv(GL_DEPTH_SCALE, &scale);
+        fmt::printf("bias: %f bits: %f clear: %f range: %f - %f, scale:%f\n", bias, bits, clear, range[0], range[1], scale);
+#endif
+
+        renderGeometryShadow_GLSL(geometry, shadowBuffer,
+                                  ri, ls, 0, geometryScale,
+                                  planetOrientation,
+                                  tsec, renderer, &lightMatrix);
+        renderer->setViewport(viewport);
+#ifdef DEPTH_BUFFER_DEBUG
+        glDisable(GL_DEPTH_TEST);
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glLoadMatrix(Ortho2D(0.0f, (float)viewport[2], 0.0f, (float)viewport[3]));
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+        glLoadIdentity();
+        glUseProgram(0);
+        glColor4f(1, 1, 1, 1);
+
+        glActiveTexture(GL_TEXTURE0);
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, shadowBuffer->depthTexture());
+#if GL_ONLY_SHADOWS
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+#endif
+
+        glBegin(GL_QUADS);
+        float side = 300.0f;
+        glTexCoord2f(0.0f, 0.0f);
+        glVertex2f(0.0f, 0.0f);
+        glTexCoord2f(1.0f, 0.0f);
+        glVertex2f(side, 0.0f);
+        glTexCoord2f(1.0f, 1.0f);
+        glVertex2f(side, side);
+        glTexCoord2f(0.0f, 1.0f);
+        glVertex2f(0.0f, side);
+        glEnd();
+
+        glMatrixMode(GL_MODELVIEW);
+        glPopMatrix();
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDisable(GL_TEXTURE_2D);
+        glEnable(GL_DEPTH_TEST);
+#endif
+        glPopAttrib();
+        glDepthRange(range[0], range[1]);
+    }
 
     GLSL_RenderContext rc(renderer, ls, geometryScale, planetOrientation);
 
     if ((renderFlags & Renderer::ShowAtmospheres) != 0)
     {
         rc.setAtmosphere(atmosphere);
+    }
+
+    if (shadowBuffer != nullptr && shadowBuffer->isValid())
+    {
+        rc.setShadowMap(shadowBuffer->depthTexture(), shadowBuffer->width(), &lightMatrix);
     }
 
     rc.setCameraOrientation(ri.orientation);
@@ -322,8 +407,8 @@ void renderGeometry_GLSL(Geometry* geometry,
     if (texOverride != InvalidResource)
     {
         Material m;
-        m.diffuse = Material::Color(ri.color.red(), ri.color.green(), ri.color.blue());
-        m.specular = Material::Color(ri.specularColor.red(), ri.specularColor.green(), ri.specularColor.blue());
+        m.diffuse = Material::Color(ri.color);
+        m.specular = Material::Color(ri.specularColor);
         m.specularPower = ri.specularPower;
 
         CelestiaTextureResource textureResource(texOverride);
@@ -355,8 +440,6 @@ void renderGeometry_GLSL_Unlit(Geometry* geometry,
                                double tsec,
                                const Renderer* renderer)
 {
-    glDisable(GL_LIGHTING);
-
     GLSLUnlit_RenderContext rc(renderer, geometryScale);
 
     rc.setPointScale(ri.pointScale);
@@ -366,8 +449,8 @@ void renderGeometry_GLSL_Unlit(Geometry* geometry,
     if (texOverride != InvalidResource)
     {
         Material m;
-        m.diffuse = Material::Color(ri.color.red(), ri.color.green(), ri.color.blue());
-        m.specular = Material::Color(ri.specularColor.red(), ri.specularColor.green(), ri.specularColor.blue());
+        m.diffuse = Material::Color(ri.color);
+        m.specular = Material::Color(ri.specularColor);
         m.specularPower = ri.specularPower;
 
         CelestiaTextureResource textureResource(texOverride);
@@ -405,8 +488,6 @@ void renderClouds_GLSL(const RenderInfo& ri,
     Texture* textures[MAX_SPHERE_MESH_TEXTURES] =
         { nullptr, nullptr, nullptr, nullptr, nullptr, nullptr };
     unsigned int nTextures = 0;
-
-    glDisable(GL_LIGHTING);
 
     ShaderProperties shadprop;
     shadprop.nLights = ls.nLights;
@@ -483,8 +564,7 @@ void renderClouds_GLSL(const RenderInfo& ri,
 
     prog->setLightParameters(ls, ri.color, ri.specularColor, Color::Black);
     prog->eyePosition = ls.eyePos_obj;
-    prog->ambientColor = Vector3f(ri.ambientColor.red(), ri.ambientColor.green(),
-                                  ri.ambientColor.blue());
+    prog->ambientColor = ri.ambientColor.toVector3();
     prog->textureOffset = texOffset;
 
     if (atmosphere != nullptr)
@@ -538,8 +618,6 @@ renderAtmosphere_GLSL(const RenderInfo& ri,
     if (ls.nLights == 0)
         return;
 
-    glDisable(GL_LIGHTING);
-
     ShaderProperties shadprop;
     shadprop.nLights = ls.nLights;
 
@@ -584,38 +662,105 @@ renderAtmosphere_GLSL(const RenderInfo& ri,
     glDepthMask(GL_TRUE);
     glFrontFace(GL_CCW);
     glPopMatrix();
-
-
     glUseProgram(0);
-
-    //glActiveTexture(GL_TEXTURE0);
-    //glEnable(GL_TEXTURE_2D);
 }
 
-
-static void renderRingSystem(float innerRadius,
+static void renderRingSystem(GLuint *vboId,
+                             float innerRadius,
                              float outerRadius,
-                             float beginAngle,
-                             float endAngle,
-                             unsigned int nSections)
+                             unsigned int nSections = 180)
 {
-    float angle = endAngle - beginAngle;
-
-    glBegin(GL_QUAD_STRIP);
-    for (unsigned int i = 0; i <= nSections; i++)
+    struct RingVertex
     {
-        float t = (float) i / (float) nSections;
-        float theta = beginAngle + t * angle;
-        auto s = (float) sin(theta);
-        auto c = (float) cos(theta);
-        glTexCoord2f(0, 0.5f);
-        glVertex3f(c * innerRadius, 0, s * innerRadius);
-        glTexCoord2f(1, 0.5f);
-        glVertex3f(c * outerRadius, 0, s * outerRadius);
+        GLfloat pos[3];
+        GLshort tex[2];
+    };
+
+    constexpr const float angle = 2*static_cast<float>(PI);
+
+    if (*vboId == 0)
+    {
+        struct RingVertex vertex;
+        vector<struct RingVertex> ringCoord;
+        ringCoord.reserve(2 * nSections);
+        for (unsigned i = 0; i <= nSections; i++)
+        {
+            float t = (float) i / (float) nSections;
+            float theta = t * angle;
+            float s = (float) sin(theta);
+            float c = (float) cos(theta);
+
+            // inner point
+            vertex.pos[0] = c * innerRadius;
+            vertex.pos[1] = 0.0f;
+            vertex.pos[2] = s * innerRadius;
+            vertex.tex[0] = 0;
+            vertex.tex[1] = (i & 1) ^ 1; // even?(i) ? 0 : 1;
+            ringCoord.push_back(vertex);
+
+            // outer point
+            vertex.pos[0] = c * outerRadius;
+            // vertex.pos[1] = 0.0f;
+            vertex.pos[2] = s * outerRadius;
+            vertex.tex[0] = 1;
+            // vertex.tex[1] = (i & 1) ^ 1;
+            ringCoord.push_back(vertex);
+        }
+
+        glGenBuffers(1, vboId);
+        glBindBuffer(GL_ARRAY_BUFFER, *vboId);
+        glBufferData(GL_ARRAY_BUFFER,
+                     ringCoord.size() * sizeof(struct RingVertex),
+                     ringCoord.data(),
+                     GL_STATIC_DRAW);
     }
-    glEnd();
+    else
+    {
+        glBindBuffer(GL_ARRAY_BUFFER, *vboId);
+    }
+    // I haven't found a way to use glEnableVertexAttribArray instead of
+    // glEnableClientState with OpenGL2
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glTexCoordPointer(2, GL_SHORT, sizeof(struct RingVertex),
+                      (GLvoid*) offsetof(struct RingVertex, tex));
+
+#if 0
+    glEnableVertexAttribArray(CelestiaGLProgram::VertexCoordAttributeIndex);
+    glVertexAttribPointer(CelestiaGLProgram::VertexCoordAttributeIndex,
+                          3, GL_FLOAT, GL_FALSE,
+                          sizeof(struct RingVertex), 0);
+#else
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glVertexPointer(3, GL_FLOAT, sizeof(struct RingVertex), 0);
+#endif
+
+    // Celestia uses glCullFace(GL_BACK) by default so we just skip it here
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, (nSections+1)*2);
+    glCullFace(GL_FRONT);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, (nSections+1)*2);
+    glCullFace(GL_BACK);
+
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+#if 0
+    glDisableVertexAttribArray(CelestiaGLProgram::VertexCoordAttributeIndex);
+#else
+    glDisableClientState(GL_VERTEX_ARRAY);
+#endif
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
+
+class GLRingRenderData : public RingRenderData
+{
+ public:
+    ~GLRingRenderData() override
+    {
+        glDeleteBuffers(vboId.size(), vboId.data());
+        vboId.fill(0);
+    }
+
+    std::array<GLuint, 4> vboId {{ 0, 0, 0, 0 }};
+};
 
 // Render a planetary ring system
 void renderRings_GLSL(RingSystem& rings,
@@ -625,7 +770,7 @@ void renderRings_GLSL(RingSystem& rings,
                       float planetOblateness,
                       unsigned int textureResolution,
                       bool renderShadow,
-                      unsigned int nSections,
+                      float segmentSizeInPixels,
                       const Renderer* renderer)
 {
     float inner = rings.innerRadius / planetRadius;
@@ -658,8 +803,7 @@ void renderRings_GLSL(RingSystem& rings,
     prog->use();
 
     prog->eyePosition = ls.eyePos_obj;
-    prog->ambientColor = Vector3f(ri.ambientColor.red(), ri.ambientColor.green(),
-                                  ri.ambientColor.blue());
+    prog->ambientColor = ri.ambientColor.toVector3();
     prog->setLightParameters(ls, ri.color, ri.specularColor, Color::Black);
 
     for (unsigned int li = 0; li < ls.nLights; li++)
@@ -728,247 +872,128 @@ void renderRings_GLSL(RingSystem& rings,
 
     if (ringsTex != nullptr)
         ringsTex->bind();
-    else
-        glDisable(GL_TEXTURE_2D);
 
-    renderRingSystem(inner, outer, 0, (float) PI * 2.0f, nSections);
-    renderRingSystem(inner, outer, (float) PI * 2.0f, 0, nSections);
+    if (rings.renderData == nullptr)
+        rings.renderData = make_shared<GLRingRenderData>();
+    auto data = reinterpret_cast<GLRingRenderData*>(rings.renderData.get());
+
+    unsigned nSections = 180;
+    size_t i = 0;
+    for (i = 0; i < data->vboId.size() - 1; i++)
+    {
+        float s = segmentSizeInPixels * tan(PI / nSections);
+        if (s < 30.0f) // TODO: make configurable
+            break;
+        nSections <<= 1;
+    }
+    renderRingSystem(&data->vboId[i], inner, outer, nSections);
 
     glBlendFunc(GL_SRC_ALPHA, GL_ONE);
 
     glUseProgram(0);
 }
 
+// Calculate the matrix used to render the model from the
+// perspective of the light.
+static
+Matrix4f directionalLightMatrix(const Vector3f& lightDirection)
+{
+    const Vector3f &viewDir = lightDirection;
+    Vector3f upDir = viewDir.unitOrthogonal();
+    Vector3f rightDir = upDir.cross(viewDir);
+    Matrix4f m = Matrix4f::Identity();
 
+    m.row(0).head(3) = rightDir;
+    m.row(1).head(3) = upDir;
+    m.row(2).head(3) = viewDir;
+
+    return m;
+}
+
+static
+Matrix4f shadowProjectionMatrix(float objectRadius)
+{
+    return Ortho(-objectRadius, objectRadius,
+                 -objectRadius, objectRadius,
+                 -objectRadius, objectRadius);
+}
 
 /*! Render a mesh object
  *  Parameters:
  *    tsec : animation clock time in seconds
  */
+static
 void renderGeometryShadow_GLSL(Geometry* geometry,
                               FramebufferObject* shadowFbo,
                               const RenderInfo& ri,
                               const LightingState& ls,
+                              int lightIndex,
                               float geometryScale,
                               const Quaternionf& planetOrientation,
                               double tsec,
-                              const Renderer* renderer)
+                              const Renderer* renderer,
+                              Eigen::Matrix4f *lightMatrix)
 {
-    glDisable(GL_LIGHTING);
-
+    glBindTexture(GL_TEXTURE_2D, 0);
     shadowFbo->bind();
     glViewport(0, 0, shadowFbo->width(), shadowFbo->height());
-    glClear(GL_DEPTH_BUFFER_BIT);
 
     // Write only to the depth buffer
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glDepthMask(GL_TRUE);
-
-    // Set up the camera for drawing from the light source direction
+    glEnable(GL_DEPTH_TEST);
+    glClear(GL_DEPTH_BUFFER_BIT);
 
     // Render backfaces only in order to reduce self-shadowing artifacts
     glCullFace(GL_FRONT);
 
     GLSL_RenderContext rc(renderer, ls, geometryScale, planetOrientation);
 
+    Material m;
+    m.diffuse = Material::Color(1.0f, 1.0f, 1.0f);
+    rc.setMaterial(&m);
+    rc.lock();
     rc.setPointScale(ri.pointScale);
 
-    int lightIndex = 0;
-    Vector3f viewDir = -ls.lights[lightIndex].direction_obj;
-    Vector3f upDir = viewDir.unitOrthogonal();
-    /*Vector3f rightDir = */upDir.cross(viewDir);
-
-
+#ifdef USE_DEPTH_SHADER
+    auto *prog = renderer->getShaderManager().getShader("depth");
+    if (prog == nullptr)
+        return;
+    prog->use();
+#else
     glUseProgram(0);
+#endif
+
+    auto projMat = shadowProjectionMatrix(1);
+    auto modelViewMat = directionalLightMatrix(ls.lights[lightIndex].direction_obj);
+    *lightMatrix = projMat * modelViewMat;
+
+    // Enable poligon offset to decrease "shadow acne"
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(.001f, .001f);
+
+    glMatrixMode(GL_PROJECTION);
+    glPushMatrix();
+    glLoadMatrix(projMat);
+    glMatrixMode(GL_MODELVIEW);
+    glPushMatrix();
+    glLoadMatrix(modelViewMat);
 
     geometry->render(rc, tsec);
 
-    shadowFbo->unbind();
-
+#ifdef USE_DEPTH_SHADER
+    glUseProgram(0);
+#endif
+    glDisable(GL_POLYGON_OFFSET_FILL);
     // Re-enable the color buffer
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glCullFace(GL_BACK);
+    glMatrixMode(GL_MODELVIEW);
+    glPopMatrix();
+    glMatrixMode(GL_PROJECTION);
+    glPopMatrix();
+    shadowFbo->unbind();
+#if GL_ONLY_SHADOWS
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+#endif
 }
-
-
-
-
-FramebufferObject::FramebufferObject(GLuint width, GLuint height, unsigned int attachments) :
-    m_width(width),
-    m_height(height),
-    m_colorTexId(0),
-    m_depthTexId(0),
-    m_fboId(0),
-    m_status(GL_FRAMEBUFFER_UNSUPPORTED_EXT)
-{
-    if (attachments != 0)
-    {
-        generateFbo(attachments);
-    }
-}
-
-
-FramebufferObject::~FramebufferObject()
-{
-    cleanup();
-}
-
-
-bool
-FramebufferObject::isValid() const
-{
-    return m_status == GL_FRAMEBUFFER_COMPLETE_EXT;
-}
-
-
-GLuint
-FramebufferObject::colorTexture() const
-{
-    return m_colorTexId;
-}
-
-
-GLuint
-FramebufferObject::depthTexture() const
-{
-    return m_depthTexId;
-}
-
-
-void
-FramebufferObject::generateColorTexture()
-{
-    // Create and bind the texture
-    glGenTextures(1, &m_colorTexId);
-    glBindTexture(GL_TEXTURE_2D, m_colorTexId);
-
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    // Clamp to edge
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    // Set the texture dimensions
-    // Do we need to set GL_DEPTH_COMPONENT24 here?
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, m_width, m_height, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
-
-    // Unbind the texture
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-
-void
-FramebufferObject::generateDepthTexture()
-{
-    // Create and bind the texture
-    glGenTextures(1, &m_depthTexId);
-    glBindTexture(GL_TEXTURE_2D, m_depthTexId);
-
-    // Only nearest sampling is appropriate for depth textures
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
-    // Clamp to edge
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    // Set the texture dimensions
-    // Do we need to set GL_DEPTH_COMPONENT24 here?
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, m_width, m_height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, nullptr);
-
-    // Unbind the texture
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-
-void
-FramebufferObject::generateFbo(unsigned int attachments)
-{
-    // Create the FBO
-    glGenFramebuffersEXT(1, &m_fboId);
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, m_fboId);
-
-    glReadBuffer(GL_NONE);
-
-    if ((attachments & ColorAttachment) != 0)
-    {
-        generateColorTexture();
-        glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, m_colorTexId, 0);
-        m_status = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
-        if (m_status != GL_FRAMEBUFFER_COMPLETE_EXT)
-        {
-            glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
-            cleanup();
-            return;
-        }
-    }
-    else
-    {
-        // Depth-only rendering; no color buffer.
-        glDrawBuffer(GL_NONE);
-    }
-
-    if ((attachments & DepthAttachment) != 0)
-    {
-        generateDepthTexture();
-        glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_TEXTURE_2D, m_depthTexId, 0);
-        m_status = glCheckFramebufferStatusEXT(GL_FRAMEBUFFER_EXT);
-        if (m_status != GL_FRAMEBUFFER_COMPLETE_EXT)
-        {
-            glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
-            cleanup();
-            return;
-        }
-    }
-    else
-    {
-        glFramebufferTexture2DEXT(GL_FRAMEBUFFER_EXT, GL_DEPTH_ATTACHMENT_EXT, GL_TEXTURE_2D, 0, 0);
-    }
-
-    // Restore default frame buffer
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
-}
-
-
-// Delete all GL objects associated with this framebuffer object
-void
-FramebufferObject::cleanup()
-{
-    if (m_fboId != 0)
-    {
-        glDeleteFramebuffersEXT(1, &m_fboId);
-    }
-
-    if (m_colorTexId != 0)
-    {
-        glDeleteTextures(1, &m_colorTexId);
-    }
-
-    if (m_depthTexId != 0)
-    {
-        glDeleteTextures(1, &m_depthTexId);
-    }
-}
-
-
-bool
-FramebufferObject::bind()
-{
-    if (isValid())
-    {
-        glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, m_fboId);
-        return true;
-    }
-
-    return false;
-}
-
-
-bool
-FramebufferObject::unbind()
-{
-    // Restore default frame buffer
-    glBindFramebufferEXT(GL_FRAMEBUFFER_EXT, 0);
-    return true;
-}
-

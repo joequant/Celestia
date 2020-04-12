@@ -16,10 +16,11 @@
 #include <cassert>
 #include <vector>
 #include <fstream>
-#include <iomanip>
+#include <celutil/debug.h>
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 
 #define TWOPI 6.28318530717958647692
@@ -2285,7 +2286,7 @@ class TitanOrbit : public CachingOrbit
         double g = W4 - Om_ - psi;
 
         // Three successive approximations will always be enough
-        double om;
+        double om = 0.0;
         for (int n = 0; n < 3; n++)
         {
             om = W4 + 0.37515 * (sinD(2 * g) - sinD(2 * g0));
@@ -3111,9 +3112,6 @@ class JPLEphOrbit : public CachingOrbit
         }
 
         // Rotate from the J2000 mean equator to the ecliptic
-#ifdef CELVEC
-        pos = pos * Mat3d::xrotation(astro::J2000Obliquity);
-#endif
         pos = XRotation(-astro::J2000Obliquity) * pos;
 
         // Convert to Celestia's coordinate system
@@ -3162,11 +3160,8 @@ Orbit* GetCustomOrbit(const string& name)
             jpleph = JPLEphemeris::load(in);
         if (jpleph != nullptr)
         {
-            clog << "Loaded DE" << jpleph->getDENumber() <<
-                " ephemeris. Valid from JD" <<
-                setprecision(8) <<
-                jpleph->getStartDate() << " to JD" <<
-                jpleph->getEndDate() << '\n';
+           fmt::fprintf(clog, "Loaded DE%u ephemeris. Valid from JD %.8lf to JD %.8lf\n",
+                        jpleph->getDENumber(), jpleph->getStartDate(), jpleph->getEndDate());
         }
     }
 

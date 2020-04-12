@@ -7,12 +7,13 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
+#include <config.h>
 #include <algorithm>
 #include <celutil/debug.h>
 #include <celutil/util.h>
-#include <celengine/celestia.h>
 #include <celengine/astro.h>
 #include <celengine/parser.h>
+#include <celengine/tokenizer.h>
 #include "destination.h"
 
 using namespace std;
@@ -28,7 +29,7 @@ DestinationList* ReadDestinationList(istream& in)
     {
         if (tokenizer.getTokenType() != Tokenizer::TokenBeginGroup)
         {
-            DPRINTF(0, "Error parsing destinations file.\n");
+            DPRINTF(LOG_LEVEL_ERROR, "Error parsing destinations file.\n");
             for_each(destinations->begin(), destinations->end(), deleteFunc<Destination*>());
             delete destinations;
             return nullptr;
@@ -38,7 +39,7 @@ DestinationList* ReadDestinationList(istream& in)
         Value* destValue = parser.readValue();
         if (destValue == nullptr || destValue->getType() != Value::HashType)
         {
-            DPRINTF(0, "Error parsing destination.\n");
+            DPRINTF(LOG_LEVEL_ERROR, "Error parsing destination.\n");
             for_each(destinations->begin(), destinations->end(), deleteFunc<Destination*>());
             delete destinations;
             if (destValue != nullptr)
@@ -51,7 +52,7 @@ DestinationList* ReadDestinationList(istream& in)
 
         if (!destParams->getString("Name", dest->name))
         {
-            DPRINTF(1, "Skipping unnamed destination\n");
+            DPRINTF(LOG_LEVEL_INFO, "Skipping unnamed destination\n");
             delete dest;
         }
         else

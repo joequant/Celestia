@@ -11,6 +11,9 @@
 #include <cctype>
 #include <cstring>
 #include "util.h"
+#include <wchar.h>
+#include <climits>
+#include <fmt/printf.h>
 
 uint16_t WGL4_Normalization_00[256] = {
     0x0000, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0006, 0x0007,
@@ -557,7 +560,7 @@ int UTF8StringCompare(const std::string& s0, const std::string& s1)
         return 0;
 }
 
-int UTF8StringCompare(const std::string& s0, const std::string& s1, size_t n)
+int UTF8StringCompare(const std::string& s0, const std::string& s1, size_t n, bool ignoreCase)
 {
     int len0 = s0.length();
     int len1 = s1.length();
@@ -577,6 +580,11 @@ int UTF8StringCompare(const std::string& s0, const std::string& s1, size_t n)
         ch0 = UTF8Normalize(ch0);
         ch1 = UTF8Normalize(ch1);
 
+        if (ignoreCase)
+        {
+            ch0 = std::tolower(ch0);
+            ch1 = std::tolower(ch1);
+        }
         if (ch0 < ch1)
             return -1;
         if (ch0 > ch1)
@@ -697,7 +705,16 @@ static std::string noAbbrev;
 
 // Greek alphabet crud . . . should probably moved to it's own module.
 
-Greek* Greek::instance = nullptr;
+static size_t greekChunkLength(const std::string&);
+
+Greek* Greek::m_instance = nullptr;
+
+Greek* Greek::getInstance()
+{
+    if (m_instance == nullptr)
+        m_instance = new Greek();
+    return m_instance;
+}
 
 Greek::Greek()
 {
@@ -720,17 +737,15 @@ Greek::~Greek()
 
 const std::string& Greek::canonicalAbbreviation(const std::string& letter)
 {
-    if (instance == nullptr)
-        instance = new Greek();
-
+    Greek *instance = Greek::getInstance();
     int i;
-    for (i = 0; i < Greek::instance->nLetters; i++)
+    for (i = 0; i < instance->nLetters; i++)
     {
         if (compareIgnoringCase(letter, instance->names[i]) == 0)
             return instance->abbrevs[i];
     }
 
-    for (i = 0; i < Greek::instance->nLetters; i++)
+    for (i = 0; i < instance->nLetters; i++)
     {
         if (compareIgnoringCase(letter, instance->abbrevs[i]) == 0)
             return instance->abbrevs[i];
@@ -738,7 +753,7 @@ const std::string& Greek::canonicalAbbreviation(const std::string& letter)
 
     if (letter.length() == 2)
     {
-        for (i = 0; i < Greek::instance->nLetters; i++)
+        for (i = 0; i < instance->nLetters; i++)
         {
             if (letter[0] == greekAlphabetUTF8[i][0] &&
                 letter[1] == greekAlphabetUTF8[i][1])
@@ -751,51 +766,67 @@ const std::string& Greek::canonicalAbbreviation(const std::string& letter)
     return noAbbrev;
 }
 
+static const char* toSuperscript(char c)
+{
+    switch (c)
+    {
+    case '0':
+        return UTF8_SUPERSCRIPT_0;
+    case '1':
+        return UTF8_SUPERSCRIPT_1;
+    case '2':
+        return UTF8_SUPERSCRIPT_2;
+    case '3':
+        return UTF8_SUPERSCRIPT_3;
+    case '4':
+        return UTF8_SUPERSCRIPT_4;
+    case '5':
+        return UTF8_SUPERSCRIPT_5;
+    case '6':
+        return UTF8_SUPERSCRIPT_6;
+    case '7':
+        return UTF8_SUPERSCRIPT_7;
+    case '8':
+        return UTF8_SUPERSCRIPT_8;
+    case '9':
+        return UTF8_SUPERSCRIPT_9;
+    default:
+        return nullptr;
+    }
+}
+
 //! Replaces the Greek letter abbreviation at the beginning
 //! of a string by the UTF-8 representation of that letter.
 //! Also, replace digits following Greek letters with UTF-8
 //! superscripts.
 std::string ReplaceGreekLetterAbbr(const std::string& str)
 {
-    std::string ret = str;
+    Greek *instance = Greek::getInstance();
+    size_t len = greekChunkLength(str);
 
-    if (str[0] >= 'A' && str[0] <= 'Z' &&
-        str[1] >= 'A' && str[1] <= 'Z')
+    if (str[0] >= 'A' && str[0] <= 'Z')
     {
         // Linear search through all letter abbreviations
-        for (int i = 0; i < Greek::instance->nLetters; i++)
+        for (int i = 0; i < instance->nLetters; i++)
         {
-            const std::string& abbr = Greek::instance->abbrevs[i];
-            if (str.compare(0, abbr.length(), abbr) == 0 &&
-                (str[abbr.length()] == ' ' || isdigit(str[abbr.length()])))
+            std::string prefix = instance->abbrevs[i];
+            if (len != prefix.length() || UTF8StringCompare(str, prefix, len, true) != 0)
             {
-                std::string superscript;
-                if (str.length() > abbr.length())
-                {
-                    if (str[abbr.length()] == '1')
-                        superscript = UTF8_SUPERSCRIPT_1;
-                    else if (str[abbr.length()] == '2')
-                        superscript = UTF8_SUPERSCRIPT_2;
-                    else if (str[abbr.length()] == '3')
-                        superscript = UTF8_SUPERSCRIPT_3;
-                }
-
-                if (superscript.empty())
-                {
-                    ret = std::string(greekAlphabetUTF8[i]) + str.substr(abbr.length());
-                }
-                else
-                {
-                    ret = std::string(greekAlphabetUTF8[i]) + superscript +
-                        str.substr(abbr.length() + 1);
-                }
-
-                break;
+                prefix = instance->names[i];
+                if (len != prefix.length() || UTF8StringCompare(str, prefix, len, true) != 0)
+                    continue;
             }
+
+            std::string ret = greekAlphabetUTF8[i];
+            auto len = prefix.length();
+            for (; str.length() > len && isdigit(str[len]); len++)
+                ret += toSuperscript(str[len]);
+            ret += str.substr(len);
+            return ret;
         }
     }
 
-    return ret;
+    return str;
 }
 
 //! Replaces the Greek letter abbreviation at the beginning
@@ -805,14 +836,16 @@ std::string ReplaceGreekLetterAbbr(const std::string& str)
 //! convenient, but more efficient. Return the number of
 //! characters copied to the destination string, not
 //! including the zero terminator.
+#if 0
 unsigned int
 ReplaceGreekLetterAbbr(char *dst, unsigned int dstSize, const char* src, unsigned int srcLength)
 {
+    Greek *instance = Greek::getInstance();
     if (src[0] >= 'A' && src[0] <= 'Z' &&
         src[1] >= 'A' && src[1] <= 'Z')
     {
         // Linear search through all letter abbreviations
-        for (unsigned int i = 0; i < (unsigned int) Greek::instance->nLetters; i++)
+        for (unsigned int i = 0; i < (unsigned int) instance->nLetters; i++)
         {
             const char* abbr = canonicalAbbrevs[i];
             unsigned int j = 0;
@@ -824,18 +857,12 @@ ReplaceGreekLetterAbbr(char *dst, unsigned int dstSize, const char* src, unsigne
             {
                 unsigned int abbrevLength = j;
                 unsigned int srcIndex = j;
-                const char* superscript = nullptr;
-                if (src[abbrevLength] == '1')
-                    superscript = UTF8_SUPERSCRIPT_1;
-                else if (src[abbrevLength] == '2')
-                    superscript = UTF8_SUPERSCRIPT_2;
-                else if (src[abbrevLength] == '3')
-                    superscript = UTF8_SUPERSCRIPT_3;
+                const char *superscript = toSuperscript(src[abbrevLength]);
 
                 const char* utfGreek = greekAlphabetUTF8[i];
                 unsigned int utfGreekLength = strlen(utfGreek);
 
-                unsigned int requiredLength = (int) srcLength;
+                unsigned int requiredLength = srcLength;
                 if (utfGreekLength > abbrevLength)
                     requiredLength += utfGreekLength - abbrevLength;
                 if (superscript != nullptr)
@@ -889,4 +916,108 @@ ReplaceGreekLetterAbbr(char *dst, unsigned int dstSize, const char* src, unsigne
     }
 
     return 0;
+}
+#endif
+
+static int findGreekNameIndexBySubstr(const std::string &, int = 0, unsigned int = UINT_MAX);
+static std::string firstGreekAbbrCompletion(const std::string &);
+
+bool inline isSubstringIgnoringCase(const std::string &s0, const std::string &s1, size_t n)
+{
+    return UTF8StringCompare(s0, s1, n, true) == 0;
+}
+
+static int findGreekNameIndexBySubstr(const std::string &s, int start, unsigned int n)
+{
+    Greek *instance = Greek::getInstance();
+
+    if (s.empty())
+        return -1;
+
+    for (int i = start; i < instance->nLetters; i++)
+    {
+        if (isSubstringIgnoringCase(instance->names[i], s, n))
+            return i;
+    }
+
+    for (int i = start; i < instance->nLetters; i++)
+    {
+        if (isSubstringIgnoringCase(instance->abbrevs[i], s, n))
+            return i;
+    }
+
+    return -1;
+}
+
+static size_t greekChunkLength(const std::string& str)
+{
+    bool npos = false;
+    size_t sp = str.find_first_of(' ');
+    if (sp == std::string::npos)
+    {
+        sp = str.length();
+        npos = true;
+    }
+
+    if (isdigit(str[sp - 1]))
+        while(isdigit(str[sp - 1])) sp--;
+    else if (npos)
+        sp = std::string::npos;
+    return sp;
+}
+
+static std::string firstGreekAbbrCompletion(const std::string &s)
+{
+    std::string ret;
+    size_t sp = greekChunkLength(s);
+    if (sp == std::string::npos)
+    {
+        int i = findGreekNameIndexBySubstr(s);
+        return (i >= 0) ? Greek::getInstance()->abbrevs[i] : s;
+    }
+    else
+    {
+        std::string prefix = s.substr(0, sp);
+        ret = Greek::canonicalAbbreviation(prefix);
+        return ret.empty() ? s : prefix + s.substr(sp);
+    }
+
+    return ret;
+}
+
+std::vector<std::string> getGreekCompletion(const std::string &s)
+{
+    std::vector<std::string> ret;
+    if (s.empty())
+        return ret;
+
+    size_t sp = greekChunkLength(s);
+    if (sp == std::string::npos)
+    {
+        sp = UTF8Length(s);
+        for(int i = 0; i >= 0;)
+        {
+            std::string rets;
+            i = findGreekNameIndexBySubstr(s, i, sp);
+            if (i >= 0)
+            {
+                rets = Greek::getInstance()->abbrevs[i];
+                rets += " ";
+                ret.emplace_back(ReplaceGreekLetterAbbr(rets));
+                i++;
+            }
+        }
+    }
+    else
+    {
+        std::string prefix = s.substr(0, sp);
+        std::string rets = Greek::canonicalAbbreviation(prefix);
+        if (!rets.empty())
+        {
+            rets += s.substr(sp);
+            ret.emplace_back(ReplaceGreekLetterAbbr(rets));
+        }
+    }
+
+    return ret;
 }

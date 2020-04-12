@@ -13,13 +13,14 @@
 #include "frametree.h"
 #include <celmath/mathlib.h>
 #include <celmath/solve.h>
+#include <celmath/geomutil.h>
 
 static const double maximumSimTime = 730486721060.00073; // 2000000000 Jan 01 12:00:00 UTC
 static const double minimumSimTime = -730498278941.99951; // -2000000000 Jan 01 12:00:00 UTC
 
 using namespace Eigen;
 using namespace std;
-
+using namespace celmath;
 
 #define VELOCITY_CHANGE_TIME      0.25f
 
@@ -38,7 +39,7 @@ static Vector3d slerp(double t, const Vector3d& v0, const Vector3d& v1)
     double cosTheta = u.dot(v1 / r1);
     double theta = acos(cosTheta);
 
-    return (cos(theta * t) * u + sin(theta * t) * v) * Mathd::lerp(t, r0, r1);
+    return (cos(theta * t) * u + sin(theta * t) * v) * lerp(t, r0, r1);
 }
 
 
@@ -55,9 +56,8 @@ static Vector3d slerp(double t, const Vector3d& v0, const Vector3d& v1)
  *  updates due to an active goto operation.
  */
 
-Observer::Observer()
+Observer::Observer() : frame(make_shared<ObserverFrame>())
 {
-    frame = new ObserverFrame();
     updateUniversal();
 }
 
@@ -69,7 +69,6 @@ Observer::Observer(const Observer& o) :
     orientation(o.orientation),
     velocity(o.velocity),
     angularVelocity(o.angularVelocity),
-    frame(nullptr),
     realTime(o.realTime),
     targetSpeed(o.targetSpeed),
     targetVelocity(o.targetVelocity),
@@ -83,13 +82,8 @@ Observer::Observer(const Observer& o) :
     locationFilter(o.locationFilter),
     displayedSurface(o.displayedSurface)
 {
-    frame = new ObserverFrame(*o.frame);
+    setFrame(o.frame);
     updateUniversal();
-}
-
-Observer::~Observer()
-{
-    delete frame;
 }
 
 Observer& Observer::operator=(const Observer& o)
@@ -113,7 +107,7 @@ Observer& Observer::operator=(const Observer& o)
     locationFilter = o.locationFilter;
     displayedSurface = o.displayedSurface;
 
-    setFrame(*o.frame);
+    setFrame(o.frame);
     updateUniversal();
 
     return *this;
@@ -242,42 +236,6 @@ void Observer::setAngularVelocity(const Vector3d& v)
 }
 
 
-/*! Determine an orientation that will make the negative z-axis point from
- *  from the observer to the target, with the y-axis pointing in direction
- *  of the component of 'up' that is orthogonal to the z-axis.
- */
-// TODO: This is a generally useful function that should be moved to
-// the celmath package.
-template<class T> static Quaternion<T>
-lookAt(Matrix<T, 3, 1> from, Matrix<T, 3, 1> to, Matrix<T, 3, 1> up)
-{
-    Matrix<T, 3, 1> n = to - from;
-    n.normalize();
-    Matrix<T, 3, 1> v = n.cross(up).normalized();
-    Matrix<T, 3, 1> u = v.cross(n);
-
-    Matrix<T, 3, 3> m;
-    m.col(0) = v;
-    m.col(1) = u;
-    m.col(2) = -n;
-
-    return Quaternion<T>(m).conjugate();
-}
-
-#ifdef CELVEC
-template<class T> static Quat<T>
-lookAt(Point3<T> from, Point3<T> to, Vector3<T> up)
-{
-    Vector3<T> n = to - from;
-    n.normalize();
-    Vector3<T> v = n ^ up;
-    v.normalize();
-    Vector3<T> u = v ^ n;
-
-    return Quat<T>::matrixToQuaternion(Matrix3<T>(v, u, -n));
-}
-#endif
-
 double Observer::getArrivalTime() const
 {
     if (observerMode != Travelling)
@@ -310,9 +268,6 @@ void Observer::update(double dt, double timeScale)
             t = (float) clamp((realTime - journey.startTime) / journey.duration);
 
         Vector3d jv = journey.to.offsetFromKm(journey.from);
-#ifdef CELVEC
-        Vector3d jv = journey.to - journey.from;
-#endif
         UniversalCoord p;
 
         // Another interpolation method . . . accelerate exponentially,
@@ -348,12 +303,6 @@ void Observer::update(double dt, double timeScale)
                         p = journey.from.offsetKm(v * x);
                     else
                         p = journey.to.offsetKm(-v * x);
-#ifdef CELVEC
-                    if (t < 0.5)
-                        p = journey.from + v * astro::kilometersToMicroLightYears(x);
-                    else
-                        p = journey.to - v * astro::kilometersToMicroLightYears(x);
-#endif
                 }
             }
             else if (journey.traj == GreatCircle)
@@ -392,17 +341,6 @@ void Observer::update(double dt, double timeScale)
                         v = slerp(x, v1, v0);
 
                     p = frame->convertFromUniversal(origin.offsetKm(v), simTime);
-#ifdef CELVEC
-                    x = astro::kilometersToMicroLightYears(x / jv.length());
-                    Vector3d v;
-
-                    if (t < 0.5)
-                        v = slerp(x, v0, v1);
-                    else
-                        v = slerp(x, v1, v0);
-
-                    p = frame->convertFromUniversal(origin + v, simTime);
-#endif
                 }
             }
             else if (journey.traj == CircularOrbit)
@@ -451,18 +389,6 @@ void Observer::update(double dt, double timeScale)
             }
 
             q = journey.initialOrientation.slerp(v, journey.finalOrientation);
-#ifdef CELVEC
-            // Be careful to choose the shortest path when interpolating
-            if ((journey.initialOrientation.coeffs() - journey.finalOrientation.coeffs()).norm() <
-                (journey.initialOrientation.coeffs() + journey.finalOrientation.coeffs()).norm())
-            {
-                q = journey.initialOrientation.slerp(v, journey.finalOrientation);
-            }
-            else
-            {
-                q = journey.initialOrientation.slerp(v, journey.finalOrientation * -1.0);
-            }
-#endif
         }
         else if (t < journey.startInterpolation)
         {
@@ -512,11 +438,6 @@ void Observer::update(double dt, double timeScale)
         Quaterniond dr = Quaterniond(0.0, halfAV.x(), halfAV.y(), halfAV.z()) * orientation;
         orientation = Quaterniond(orientation.coeffs() + dt * dr.coeffs());
         orientation.normalize();
-#ifdef CELVEC
-        Quaterniond dr = 0.5 * (AV * orientation);
-        orientation += dt * dr;
-        orientation.normalize();
-#endif
     }
 
     updateUniversal();
@@ -528,7 +449,7 @@ void Observer::update(double dt, double timeScale)
         Vector3d up = getOrientation().conjugate() * Vector3d::UnitY();
         Vector3d viewDir = trackObject.getPosition(getTime()).offsetFromKm(getPosition()).normalized();
 
-        setOrientation(lookAt<double>(Vector3d::Zero(), viewDir, up));
+        setOrientation(LookAt<double>(Vector3d::Zero(), viewDir, up));
     }
 }
 
@@ -572,17 +493,12 @@ void Observer::setLocationFilter(uint64_t _locationFilter)
 void Observer::reverseOrientation()
 {
     setOrientation(getOrientation() * Quaterniond(AngleAxisd(PI, Vector3d::UnitY())));
-#ifdef CELVEC
-    Quatd q = getOrientation();
-    q.yrotate(PI);
-    setOrientation(q);
-#endif
     reverseFlag = !reverseFlag;
 }
 
 
 
-struct TravelExpFunc : public unary_function<double, double>
+struct TravelExpFunc
 {
     double dist, s;
 
@@ -649,7 +565,7 @@ void Observer::computeGotoParameters(const Selection& destination,
 
     jparams.initialOrientation = getOrientation();
     Vector3d focus = targetPosition.offsetFromKm(jparams.to);
-    jparams.finalOrientation = lookAt<double>(Vector3d::Zero(), focus, upd);
+    jparams.finalOrientation = LookAt<double>(Vector3d::Zero(), focus, upd);
     jparams.startInterpolation = min(startInter, endInter);
     jparams.endInterpolation   = max(startInter, endInter);
 
@@ -711,7 +627,7 @@ void Observer::computeGotoParametersGC(const Selection& destination,
 
     jparams.initialOrientation = getOrientation();
     Vector3d focus = targetPosition.offsetFromKm(jparams.to);
-    jparams.finalOrientation = lookAt<double>(Vector3d::Zero(), focus, upd);
+    jparams.finalOrientation = LookAt<double>(Vector3d::Zero(), focus, upd);
     jparams.startInterpolation = min(startInter, endInter);
     jparams.endInterpolation   = max(startInter, endInter);
 
@@ -748,7 +664,7 @@ void Observer::computeCenterParameters(const Selection& destination,
 
     jparams.initialOrientation = getOrientation();
     Vector3d focus = targetPosition.offsetFromKm(jparams.to);
-    jparams.finalOrientation = lookAt<double>(Vector3d::Zero(), focus, up);
+    jparams.finalOrientation = LookAt<double>(Vector3d::Zero(), focus, up);
     jparams.startInterpolation = 0;
     jparams.endInterpolation   = 1;
 
@@ -830,7 +746,7 @@ void Observer::setMode(Observer::ObserverMode mode)
 // Private method to convert coordinates when a new observer frame is set.
 // Universal coordinates remain the same. All frame coordinates get updated, including
 // the goto parameters.
-void Observer::convertFrameCoordinates(const ObserverFrame* newFrame)
+void Observer::convertFrameCoordinates(const ObserverFrame::SharedConstPtr &newFrame)
 {
     double now = getTime();
 
@@ -852,9 +768,8 @@ void Observer::convertFrameCoordinates(const ObserverFrame* newFrame)
 */
 void Observer::setFrame(ObserverFrame::CoordinateSystem cs, const Selection& refObj, const Selection& targetObj)
 {
-    ObserverFrame* newFrame = new ObserverFrame(cs, refObj, targetObj);
+    auto newFrame = make_shared<ObserverFrame>(cs, refObj, targetObj);
     convertFrameCoordinates(newFrame);
-    delete frame;
     frame = newFrame;
 }
 
@@ -871,25 +786,22 @@ void Observer::setFrame(ObserverFrame::CoordinateSystem cs, const Selection& ref
 /*! Set the observer's reference frame. The position of the observer in
  *  universal coordinates will not change.
  */
-void Observer::setFrame(const ObserverFrame& f)
+void Observer::setFrame(const ObserverFrame::SharedConstPtr& f)
 {
-    if (frame != &f)
+    if (frame != f)
     {
-        auto* newFrame = new ObserverFrame(f);
-
-        if (frame != nullptr)
+        if (frame)
         {
-            convertFrameCoordinates(newFrame);
-            delete frame;
+            convertFrameCoordinates(f);
         }
-        frame = newFrame;
+        frame = f;
     }
 }
 
 
 /*! Get the current reference frame for the observer.
  */
-const ObserverFrame* Observer::getFrame() const
+const ObserverFrame::SharedConstPtr& Observer::getFrame() const
 {
     return frame;
 }
@@ -1339,7 +1251,7 @@ void Observer::gotoSurface(const Selection& sel, double duration)
     Quaterniond q = orientationUniv;
     if (v.dot(viewDir) < 0.0)
     {
-        q = lookAt<double>(Vector3d::Zero(), up, v);
+        q = LookAt<double>(Vector3d::Zero(), up, v);
     }
 
     ObserverFrame frame(ObserverFrame::BodyFixed, sel);
@@ -1458,7 +1370,6 @@ ObserverFrame::ObserverFrame() :
     frame(nullptr)
 {
     frame = createFrame(Universal, Selection(), Selection());
-    frame->addRef();
 }
 
 
@@ -1474,18 +1385,16 @@ ObserverFrame::ObserverFrame(CoordinateSystem _coordSys,
     targetObject(_targetObject)
 {
     frame = createFrame(_coordSys, _refObject, _targetObject);
-    frame->addRef();
 }
 
 
 /*! Create a new ObserverFrame with the specified reference frame.
  *  The coordinate system of this frame will be marked as unknown.
  */
-ObserverFrame::ObserverFrame(const ReferenceFrame &f) :
+ObserverFrame::ObserverFrame(const ReferenceFrame::SharedConstPtr &f) :
     coordSys(Unknown),
-    frame(&f)
+    frame(f)
 {
-    frame->addRef();
 }
 
 
@@ -1495,7 +1404,6 @@ ObserverFrame::ObserverFrame(const ObserverFrame& f) :
     frame(f.frame),
     targetObject(f.targetObject)
 {
-    frame->addRef();
 }
 
 
@@ -1505,20 +1413,10 @@ ObserverFrame& ObserverFrame::operator=(const ObserverFrame& f)
     targetObject = f.targetObject;
 
     // In case frames are the same, make sure we addref before releasing
-    f.frame->addRef();
-    frame->release();
     frame = f.frame;
 
     return *this;
 }
-
-
-ObserverFrame::~ObserverFrame()
-{
-    if (frame != nullptr)
-        frame->release();
-}
-
 
 ObserverFrame::CoordinateSystem
 ObserverFrame::getCoordinateSystem() const
@@ -1541,7 +1439,7 @@ ObserverFrame::getTargetObject() const
 }
 
 
-const ReferenceFrame*
+const ReferenceFrame::SharedConstPtr&
 ObserverFrame::getFrame() const
 {
     return frame;
@@ -1579,8 +1477,8 @@ ObserverFrame::convertToUniversal(const Quaterniond& q, double tjd) const
 /*! Convert a position from one frame to another.
  */
 UniversalCoord
-ObserverFrame::convert(const ObserverFrame* fromFrame,
-                       const ObserverFrame* toFrame,
+ObserverFrame::convert(const ObserverFrame::SharedConstPtr& fromFrame,
+                       const ObserverFrame::SharedConstPtr& toFrame,
                        const UniversalCoord& uc,
                        double t)
 {
@@ -1592,8 +1490,8 @@ ObserverFrame::convert(const ObserverFrame* fromFrame,
 /*! Convert an orientation from one frame to another.
 */
 Quaterniond
-ObserverFrame::convert(const ObserverFrame* fromFrame,
-                       const ObserverFrame* toFrame,
+ObserverFrame::convert(const ObserverFrame::SharedConstPtr& fromFrame,
+                       const ObserverFrame::SharedConstPtr& toFrame,
                        const Quaterniond& q,
                        double t)
 {
@@ -1603,7 +1501,7 @@ ObserverFrame::convert(const ObserverFrame* fromFrame,
 
 
 // Create the ReferenceFrame for the specified observer frame parameters.
-ReferenceFrame*
+ReferenceFrame::SharedConstPtr
 ObserverFrame::createFrame(CoordinateSystem _coordSys,
                            const Selection& _refObject,
                            const Selection& _targetObject)
@@ -1611,27 +1509,27 @@ ObserverFrame::createFrame(CoordinateSystem _coordSys,
     switch (_coordSys)
     {
     case Universal:
-        return new J2000EclipticFrame(Selection());
+        return make_shared<J2000EclipticFrame>(Selection());
 
     case Ecliptical:
-        return new J2000EclipticFrame(_refObject);
+        return make_shared<J2000EclipticFrame>(_refObject);
 
     case Equatorial:
-        return new BodyMeanEquatorFrame(_refObject, _refObject);
+        return make_shared<BodyMeanEquatorFrame>(_refObject, _refObject);
 
     case BodyFixed:
-        return new BodyFixedFrame(_refObject, _refObject);
+        return make_shared<BodyFixedFrame>(_refObject, _refObject);
 
     case PhaseLock:
     {
-        return new TwoVectorFrame(_refObject,
+        return make_shared<TwoVectorFrame>(_refObject,
                                   FrameVector::createRelativePositionVector(_refObject, _targetObject), 1,
                                   FrameVector::createRelativeVelocityVector(_refObject, _targetObject), 2);
     }
 
     case Chase:
     {
-        return new TwoVectorFrame(_refObject,
+        return make_shared<TwoVectorFrame>(_refObject,
                                   FrameVector::createRelativeVelocityVector(_refObject, _refObject.parent()), 1,
                                   FrameVector::createRelativePositionVector(_refObject, _refObject.parent()), 2);
     }
@@ -1639,8 +1537,8 @@ ObserverFrame::createFrame(CoordinateSystem _coordSys,
     case PhaseLock_Old:
     {
         FrameVector rotAxis(FrameVector::createConstantVector(Vector3d::UnitY(),
-                                                              new BodyMeanEquatorFrame(_refObject, _refObject)));
-        return new TwoVectorFrame(_refObject,
+                                                              make_shared<BodyMeanEquatorFrame>(_refObject, _refObject)));
+        return make_shared<TwoVectorFrame>(_refObject,
                                   FrameVector::createRelativePositionVector(_refObject, _targetObject), 3,
                                   rotAxis, 2);
     }
@@ -1648,9 +1546,9 @@ ObserverFrame::createFrame(CoordinateSystem _coordSys,
     case Chase_Old:
     {
         FrameVector rotAxis(FrameVector::createConstantVector(Vector3d::UnitY(),
-                                                              new BodyMeanEquatorFrame(_refObject, _refObject)));
+                                                              make_shared<BodyMeanEquatorFrame>(_refObject, _refObject)));
 
-        return new TwoVectorFrame(_refObject,
+        return make_shared<TwoVectorFrame>(_refObject,
                                   FrameVector::createRelativeVelocityVector(_refObject.parent(), _refObject), 3,
                                   rotAxis, 2);
     }
@@ -1658,10 +1556,10 @@ ObserverFrame::createFrame(CoordinateSystem _coordSys,
     case ObserverLocal:
         // TODO: This is only used for computing up vectors for orientation; it does
         // define a proper frame for the observer position orientation.
-        return new J2000EclipticFrame(Selection());
+        return make_shared<J2000EclipticFrame>(Selection());
 
     default:
-        return new J2000EclipticFrame(_refObject);
+        return make_shared<J2000EclipticFrame>(_refObject);
     }
 }
 

@@ -21,8 +21,8 @@
 #include <celengine/boundaries.h>
 #include <celengine/overlay.h>
 #include <celengine/console.h>
-#include <celengine/execution.h>
-#include <celengine/cmdparser.h>
+#include <celscript/legacy/execution.h>
+#include <celscript/legacy/cmdparser.h>
 #include <celengine/multitexture.h>
 #ifdef USE_SPICE
 #include <celephem/spiceinterface.h>
@@ -31,14 +31,15 @@
 #include <celengine/planetgrid.h>
 #include <celengine/visibleregion.h>
 #include <celmath/geomutil.h>
-#include <celutil/util.h>
+#include <celutil/color.h>
 #include <celutil/filetype.h>
-#include <celutil/directory.h>
 #include <celutil/formatnum.h>
 #include <celutil/debug.h>
+#include <celutil/gettext.h>
 #include <celutil/utf8.h>
+#include <celcompat/filesystem.h>
+#include <celcompat/memory.h>
 #include <Eigen/Geometry>
-#include <GL/glew.h>
 #include <iostream>
 #include <fstream>
 #include <iomanip>
@@ -48,11 +49,19 @@
 #include <cstring>
 #include <cassert>
 #include <ctime>
-#include <fmt/printf.h>
+#include <set>
+#include <celengine/rectangle.h>
 
 #ifdef CELX
 #include <celephem/scriptobject.h>
 #endif
+#if NO_TTF
+#include <celtxf/texturefont.h>
+#else
+#include <celttf/truetypefont.h>
+#endif
+
+#include "imagecapture.h"
 
 // TODO: proper gettext
 #define C_(a, b) (b)
@@ -60,6 +69,8 @@
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
+using namespace celestia::scripts;
 
 static const int DragThreshold = 3;
 
@@ -85,40 +96,19 @@ static void warning(string s)
     cout << s;
 }
 
-
-// Extremely basic implementation of an ExecutionEnvironment for
-// running scripts.
-class CoreExecutionEnvironment : public ExecutionEnvironment
+static bool is_valid_directory(const fs::path& dir)
 {
-private:
-    CelestiaCore& core;
+    if (dir.empty())
+        return false;
 
-public:
-    CoreExecutionEnvironment(CelestiaCore& _core) : core(_core)
+    if (!is_directory(dir))
     {
+        fmt::fprintf(cerr, "Path %s doesn't exist or isn't a directory", dir);
+        return false;
     }
 
-    Simulation* getSimulation() const
-    {
-        return core.getSimulation();
-    }
-
-    Renderer* getRenderer() const
-    {
-        return core.getRenderer();
-    }
-
-    CelestiaCore* getCelestiaCore() const
-    {
-        return &core;
-    }
-
-    void showText(string s, int horig, int vorig, int hoff, int voff,
-                  double duration)
-    {
-        core.showText(s, horig, vorig, hoff, voff, duration);
-    }
-};
+    return true;
+}
 
 
 // If right dragging to rotate, adjust the rotation rate based on the
@@ -150,143 +140,19 @@ float ComputeRotationCoarseness(Simulation& sim)
 }
 
 
-View::View(View::Type _type,
-           Observer* _observer,
-           float _x, float _y,
-           float _width, float _height) :
-    type(_type),
-    observer(_observer),
-    parent(nullptr),
-    child1(nullptr),
-    child2(nullptr),
-    x(_x),
-    y(_y),
-    width(_width),
-    height(_height),
-    renderFlags(0),
-    labelMode(0),
-    zoom(1),
-    alternateZoom(1)
-{
-}
-
-void View::mapWindowToView(float wx, float wy, float& vx, float& vy) const
-{
-    vx = (wx - x) / width;
-    vy = (wy + (y + height - 1)) / height;
-    vx = (vx - 0.5f) * (width / height);
-    vy = 0.5f - vy;
-}
-
-void View::walkTreeResize(View* sibling, int sign) {
-   float ratio;
-   switch (parent->type)
-    {
-    case View::HorizontalSplit:
-        ratio = parent->height / (parent->height -  height);
-        sibling->height *= ratio;
-        if (sign == 1)
-        {
-            sibling->y = parent->y + (sibling->y - parent->y) * ratio;
-        }
-        else
-        {
-            sibling->y = parent->y + (sibling->y - (y + height)) * ratio;
-        }
-        break;
-
-    case View::VerticalSplit:
-        ratio = parent->width / (parent->width - width);
-        sibling->width *= ratio;
-        if (sign == 1)
-        {
-            sibling->x = parent->x + (sibling->x - parent->x) * ratio;
-        }
-        else
-        {
-            sibling->x = parent->x + (sibling->x - (x + width) ) * ratio;
-        }
-        break;
-    case View::ViewWindow:
-        break;
-    }
-    if (sibling->child1) walkTreeResize(sibling->child1, sign);
-    if (sibling->child2) walkTreeResize(sibling->child2, sign);
-}
-
-bool View::walkTreeResizeDelta(View* v, float delta, bool check)
-{
-   View *p=v;
-   int sign = -1;
-   float ratio;
-   double newSize;
-
-   if (v->child1)
-   {
-       if (!walkTreeResizeDelta(v->child1, delta, check))
-           return false;
-   }
-
-   if (v->child2)
-   {
-       if (!walkTreeResizeDelta(v->child2, delta, check))
-           return false;
-   }
-
-   while ( p != child1 && p != child2 && (p = p->parent) ) ;
-   if (p == child1) sign = 1;
-   switch (type)
-    {
-    case View::HorizontalSplit:
-        delta = -delta;
-        ratio = (p->height  + sign * delta) / p->height;
-        newSize = v->height * ratio;
-        if (newSize <= .1) return false;
-        if (check) return true;
-        v->height = (float) newSize;
-        if (sign == 1)
-        {
-            v->y = p->y + (v->y - p->y) * ratio;
-        }
-        else
-        {
-            v->y = p->y + delta + (v->y - p->y) * ratio;
-        }
-        break;
-
-    case View::VerticalSplit:
-        ratio = (p->width + sign * delta) / p->width;
-        newSize = v->width * ratio;
-        if (newSize <= .1) return false;
-        if (check) return true;
-        v->width = (float) newSize;
-        if (sign == 1)
-        {
-            v->x = p->x + (v->x - p->x) * ratio;
-        }
-        else
-        {
-            v->x = p->x + delta + (v->x - p->x) * ratio;
-        }
-        break;
-    case View::ViewWindow:
-        break;
-    }
-
-    return true;
-}
-
-
 CelestiaCore::CelestiaCore() :
-    oldFOV(stdFOV)
-{
+    oldFOV(stdFOV),
     /* Get a renderer here so it may be queried for capabilities of the
        underlying engine even before rendering is enabled. It's initRenderer()
        routine will be called much later. */
-    renderer = new Renderer();
-    timer = new Timer();
-
-    execEnv = new CoreExecutionEnvironment(*this);
+    renderer(new Renderer()),
+    timer(new Timer()),
+    m_legacyPlugin(make_unique<LegacyScriptPlugin>(this)),
+#ifdef CELX
+    m_luaPlugin(make_unique<LuaScriptPlugin>(this)),
+#endif
+    m_scriptMaps(make_shared<ScriptMaps>())
+{
 
     for (int i = 0; i < KeyCount; i++)
     {
@@ -306,14 +172,6 @@ CelestiaCore::~CelestiaCore()
     if (movieCapture != nullptr)
         recordEnd();
 
-#ifdef CELX
-    // Clean up all scripts
-    delete celxScript;
-    delete luaHook;
-    delete luaSandbox;
-#endif
-
-    delete execEnv;
     delete timer;
     delete renderer;
 }
@@ -321,9 +179,9 @@ CelestiaCore::~CelestiaCore()
 void CelestiaCore::readFavoritesFile()
 {
     // Set up favorites list
-    if (config->favoritesFile != "")
+    if (!config->favoritesFile.empty())
     {
-        ifstream in(config->favoritesFile, ios::in);
+        ifstream in(config->favoritesFile.string(), ios::in);
 
         if (in.good())
         {
@@ -338,9 +196,9 @@ void CelestiaCore::readFavoritesFile()
 
 void CelestiaCore::writeFavoritesFile()
 {
-    if (config->favoritesFile != "")
+    if (!config->favoritesFile.empty())
     {
-        ofstream out(config->favoritesFile, ios::out);
+        ofstream out(config->favoritesFile.string(), ios::out);
         if (out.good())
             WriteFavoritesList(*favorites, out);
     }
@@ -419,112 +277,39 @@ void showSelectionInfo(const Selection& sel)
 
     AngleAxisf aa(orientation);
 
-    fmt::printf(_("%s\nOrientation: [%f, %f, %f], %.1f\n"),
-                sel.getName(), aa.axis().x(), aa.axis().y(), aa.axis().z(), radToDeg(aa.angle()));
+    DPRINTF(LOG_LEVEL_VERBOSE, "%s\nOrientation: [%f, %f, %f], %.1f\n", sel.getName(), aa.axis().x(), aa.axis().y(), aa.axis().z(), radToDeg(aa.angle()));
 }
 
 
 void CelestiaCore::cancelScript()
 {
-    if (runningScript != nullptr)
+    if (m_script != nullptr)
     {
-        delete runningScript;
-        scriptState = ScriptCompleted;
-        runningScript = nullptr;
-    }
-#ifdef CELX
-    if (celxScript != nullptr)
-    {
-        celxScript->cleanup();
         if (textEnterMode & KbPassToScript)
             setTextEnterMode(textEnterMode & ~KbPassToScript);
         scriptState = ScriptCompleted;
-    }
-#endif
-}
-
-
-void CelestiaCore::runScript(CommandSequence* script)
-{
-    cancelScript();
-    if (runningScript == nullptr && script != nullptr && scriptState == ScriptCompleted)
-    {
-        scriptState = ScriptRunning;
-        runningScript = new Execution(*script, *execEnv);
+        m_script = nullptr;
     }
 }
 
 
-void CelestiaCore::runScript(const string& filename)
+void CelestiaCore::runScript(const fs::path& filename)
 {
     cancelScript();
-    string localeFilename = LocaleFilename(filename);
-    ContentType type = DetermineFileType(localeFilename);
+    auto localeFilename = LocaleFilename(filename);
 
-    if (type == Content_CelestiaLegacyScript)
+    if (m_legacyPlugin->isOurFile(localeFilename))
     {
-        ifstream scriptfile(localeFilename);
-        if (!scriptfile.good())
-        {
-            fatalError(_("Error opening script file."));
-        }
-        else
-        {
-            CommandParser parser(scriptfile);
-            CommandSequence* script = parser.parse();
-            if (script == nullptr)
-            {
-                const vector<string>* errors = parser.getErrors();
-                string errorMsg;
-                if (errors->size() > 0)
-                    errorMsg = (*errors)[0];
-                fatalError(errorMsg);
-            }
-            else
-            {
-                runningScript = new Execution(*script, *execEnv);
-                scriptState = sim->getPauseState()?ScriptPaused:ScriptRunning;
-            }
-        }
+        m_script = m_legacyPlugin->loadScript(localeFilename);
+        if (m_script != nullptr)
+            scriptState = sim->getPauseState() ? ScriptPaused : ScriptRunning;
     }
 #ifdef CELX
-    else if (type == Content_CelestiaScript)
+    else if (m_luaPlugin->isOurFile(localeFilename))
     {
-        ifstream scriptfile(localeFilename);
-        if (!scriptfile.good())
-        {
-            string errMsg;
-            errMsg = fmt::sprintf(_("Error opening script '%s'"), localeFilename);
-            fatalError(errMsg);
-        }
-
-        if (celxScript == nullptr)
-        {
-            celxScript = new LuaState();
-            celxScript->init(this);
-        }
-
-        int status = celxScript->loadScript(scriptfile, localeFilename);
-        if (status != 0)
-        {
-            string errMsg = celxScript->getErrorMessage();
-            if (errMsg.empty())
-                errMsg = _("Unknown error opening script");
-            fatalError(errMsg);
-        }
-        else
-        {
-            // Coroutine execution; control may be transferred between the
-            // script and Celestia's event loop
-            if (!celxScript->createThread())
-            {
-                fatalError(_("Script coroutine initialization failed"));
-            }
-            else
-            {
-                scriptState = sim->getPauseState()?ScriptPaused:ScriptRunning;
-            }
-        }
+        m_script = m_luaPlugin->loadScript(localeFilename);
+        if (m_script != nullptr)
+            scriptState = sim->getPauseState() ? ScriptPaused : ScriptRunning;
     }
 #endif
     else
@@ -534,7 +319,7 @@ void CelestiaCore::runScript(const string& filename)
 }
 
 
-bool checkMask(int modifiers, int mask)
+static bool checkMask(int modifiers, int mask)
 {
     return (modifiers & mask) == mask;
 }
@@ -546,15 +331,14 @@ void CelestiaCore::mouseButtonDown(float x, float y, int button)
     mouseMotion = 0.0f;
 
 #ifdef CELX
-    if (celxScript != nullptr)
+    if (m_script != nullptr)
     {
-        if (celxScript->handleMouseButtonEvent(x, y, button, true))
+        if (m_script->handleMouseButtonEvent(x, y, button, true))
             return;
     }
-
-    if (luaHook && luaHook->callLuaHook(this, "mousebuttondown", x, y, button))
-        return;
 #endif
+   if (m_scriptHook != nullptr && m_scriptHook->call("mousebuttondown", x, y, button))
+        return;
 
     if (views.size() > 1)
     {
@@ -589,7 +373,8 @@ void CelestiaCore::mouseButtonDown(float x, float y, int button)
                 }
             }
         }
-        if (v2 != nullptr) {
+        if (v2 != nullptr)
+        {
              // Look for common ancestor to v1 & v2 = split being draged.
              View *p1 = v1, *p2 = v2;
              while ( (p1 = p1->parent) != nullptr )
@@ -621,15 +406,14 @@ void CelestiaCore::mouseButtonUp(float x, float y, int button)
     }
 
 #ifdef CELX
-    if (celxScript != nullptr)
+    if (m_script != nullptr)
     {
-        if (celxScript->handleMouseButtonEvent(x, y, button, false))
+        if (m_script->handleMouseButtonEvent(x, y, button, false))
             return;
     }
-
-    if (luaHook && luaHook->callLuaHook(this,"mousebuttonup", x, y, button))
-        return;
 #endif
+    if (m_scriptHook != nullptr && m_scriptHook->call("mousebuttonup", x, y, button))
+        return;
 
     // If the mouse hasn't moved much since it was pressed, treat this
     // as a selection or context menu event.  Otherwise, assume that the
@@ -643,8 +427,8 @@ void CelestiaCore::mouseButtonUp(float x, float y, int button)
             float pickX, pickY;
             float aspectRatio = ((float) width / (float) height);
             (*activeView)->mapWindowToView((float) x / (float) width,
-                                        (float) y / (float) height,
-                                        pickX, pickY);
+                                           (float) y / (float) height,
+                                           pickX, pickY);
             Vector3f pickRay =
                 sim->getActiveObserver()->getPickRay(pickX * aspectRatio, pickY);
 
@@ -660,16 +444,16 @@ void CelestiaCore::mouseButtonUp(float x, float y, int button)
             float pickX, pickY;
             float aspectRatio = ((float) width / (float) height);
             (*activeView)->mapWindowToView((float) x / (float) width,
-                                        (float) y / (float) height,
-                                        pickX, pickY);
+                                           (float) y / (float) height,
+                                           pickX, pickY);
             Vector3f pickRay =
                 sim->getActiveObserver()->getPickRay(pickX * aspectRatio, pickY);
 
             Selection sel = sim->pickObject(pickRay, renderer->getRenderFlags(), pickTolerance);
             if (!sel.empty())
             {
-                if (contextMenuCallback != nullptr)
-                    contextMenuCallback(x, y, sel);
+                if (contextMenuHandler != nullptr)
+                    contextMenuHandler->requestContextMenu(x, y, sel);
             }
         }
         else if (button == MiddleButton)
@@ -717,16 +501,11 @@ void CelestiaCore::mouseWheel(float motion, int modifiers)
 /// x and y are the pixel coordinates relative to the widget.
 void CelestiaCore::mouseMove(float x, float y)
 {
-#ifdef CELX
-    if (luaHook && luaHook->callLuaHook(this, "mousemove", x, y))
+    if (m_scriptHook != nullptr && m_scriptHook->call("mousemove", x, y))
         return;
-#endif
 
     if (views.size() > 1 && cursorHandler != nullptr)
     {
-        /*View* v1 = 0;     Unused*/
-        /*View* v2 = 0;     Unused*/
-
         for (const auto v : views)
         {
             if (v->type == View::ViewWindow)
@@ -785,13 +564,9 @@ void CelestiaCore::mouseMove(float dx, float dy, int modifiers)
         return;
     }
 
-#ifdef CELX
-    if (luaHook &&
-            luaHook->callLuaHook(this,"mousebuttonmove", dx, dy, modifiers))
-    {
-            return;
-    }
-#endif
+    if (m_scriptHook != nullptr && m_scriptHook->call("mousebuttonmove", dx, dy, modifiers))
+       return;
+
 
     if ((modifiers & (LeftButton | RightButton)) != 0)
     {
@@ -986,15 +761,9 @@ void CelestiaCore::keyDown(int key, int modifiers)
 {
     setViewChanged();
 
-#ifdef CELX
-    // TODO: should pass modifiers as a Lua table
-    if (luaHook && luaHook->callLuaHook(this,
-                                        "keydown",
-                                        (float) key, (float) modifiers))
-    {
+    if (m_scriptHook != nullptr && m_scriptHook->call("keydown", float(key), float(modifiers)))
         return;
-    }
-#endif
+
     switch (key)
     {
     case Key_F1:
@@ -1090,7 +859,6 @@ void CelestiaCore::keyUp(int key, int)
     shiftKeysPressed[key] = false;
 }
 
-#ifdef CELX
 static string getKeyName(const char* c, int modifiers)
 {
     unsigned int length = strlen(c);
@@ -1108,7 +876,6 @@ static string getKeyName(const char* c, int modifiers)
 
     return string(c);
 }
-#endif
 
 void CelestiaCore::charEntered(char c, int modifiers)
 {
@@ -1129,9 +896,9 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
 
 
 #ifdef CELX
-    if (celxScript != nullptr && (textEnterMode & KbPassToScript))
+    if (m_script != nullptr && (textEnterMode & KbPassToScript))
     {
-        if (c != '\033' && celxScript->charEntered(c_p))
+        if (c != '\033' && m_script->charEntered(c_p))
         {
             return;
         }
@@ -1143,25 +910,13 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
     {
         wchar_t wc = 0; // Null wide character
         UTF8Decode(c_p, 0, strlen(c_p), wc);
-#ifdef TARGET_OS_MAC
+#ifdef __APPLE__
         if ( wc && (!iscntrl(wc)) )
 #else
         if ( wc && (!iswcntrl(wc)) )
 #endif
         {
-            typedText += string(c_p);
-            typedTextCompletion = sim->getObjectCompletion(typedText, (renderer->getLabelMode() & Renderer::LocationLabels) != 0);
-            typedTextCompletionIdx = -1;
-#ifdef AUTO_COMPLETION
-            if (typedTextCompletion.size() == 1)
-            {
-                string::size_type pos = typedText.rfind('/', typedText.length());
-                if (pos != string::npos)
-                    typedText = typedText.substr(0, pos + 1) + typedTextCompletion[0];
-                else
-                    typedText = typedTextCompletion[0];
-            }
-#endif
+            setTypedText(c_p);
         }
         else if (c == '\b')
         {
@@ -1229,6 +984,10 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
             if (typedText != "")
             {
                 Selection sel = sim->findObjectFromPath(typedText, true);
+                if (sel.empty() && typedTextCompletion.size() > 0)
+                {
+                    sel = sim->findObjectFromPath(typedTextCompletion[0], true);
+                }
                 if (!sel.empty())
                 {
                     addToHistory();
@@ -1242,25 +1001,18 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
     }
 
 #ifdef CELX
-    if (celxScript != nullptr)
+    if (m_script != nullptr)
     {
         if (c != '\033')
         {
             string keyName = getKeyName(c_p, modifiers);
-            if (celxScript->handleKeyEvent(keyName.c_str()))
+            if (m_script->handleKeyEvent(keyName.c_str()))
                 return;
         }
     }
-
-    if (luaHook)
-    {
-        string keyName = getKeyName(c_p, modifiers);
-        if (luaHook->callLuaHook(this, "charentered", keyName.c_str()))
-        {
-            return;
-        }
-    }
 #endif
+    if (m_scriptHook != nullptr && m_scriptHook->call("charentered", getKeyName(c_p, modifiers).c_str()))
+        return;
 
     char C = toupper(c);
     switch (C)
@@ -1351,7 +1103,7 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
             {
                 MarkerRepresentation markerRep(MarkerRepresentation::Diamond);
                 markerRep.setSize(10.0f);
-                markerRep.setColor(Color(0.0f, 1.0f, 0.0f, 0.9f));
+                markerRep.setColor({0.0f, 1.0f, 0.0f, 0.9f});
 
                 sim->getUniverse()->markObject(sel, markerRep, 1);
             }
@@ -1403,6 +1155,7 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
         break;
 
     case '\026':  // Ctrl+V
+#ifdef USE_GLCONTEXT
         {
             GLContext* context = renderer->getGLContext();
             GLContext::GLRenderPath path = context->getRenderPath();
@@ -1420,6 +1173,7 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
                 notifyWatchers(RenderFlagsChanged);
             }
         }
+#endif
         break;
 
     case '\027':  // Ctrl+W
@@ -1489,11 +1243,7 @@ void CelestiaCore::charEntered(const char *c_p, int modifiers)
             // If there's a script running then pause it.  This has the
             // potentially confusing side effect of rendering nonfunctional
             // goto, center, and other movement commands.
-#ifdef CELX
-            if (runningScript != nullptr || celxScript != nullptr)
-#else
-            if (runningScript != nullptr)
-#endif
+            if (m_script != nullptr)
             {
                 if (scriptState == ScriptRunning)
                     scriptState = ScriptPaused;
@@ -2094,13 +1844,19 @@ void CelestiaCore::setAltAzimuthMode(bool enable)
     altAzimuthMode = enable;
 }
 
+void CelestiaCore::start()
+{
+    time_t curtime = time(nullptr);
+    start(astro::UTCtoTDB((double) curtime / 86400.0 + (double) astro::Date(1970, 1, 1)));
+}
+
 void CelestiaCore::start(double t)
 {
     if (config->initScriptFile != "")
     {
         // using the KdeAlerter in runScript would create an infinite loop,
         // break it here by resetting config->initScriptFile:
-        string filename = config->initScriptFile;
+        fs::path filename(config->initScriptFile);
         config->initScriptFile = "";
         runScript(filename);
     }
@@ -2305,28 +2061,18 @@ void CelestiaCore::tick()
     }
 
     // If there's a script running, tick it
-    if (runningScript != nullptr)
+    if (m_script != nullptr)
     {
-        bool finished = runningScript->tick(dt);
-        if (finished)
-            cancelScript();
-    }
-
-#ifdef CELX
-    if (celxScript != nullptr)
-    {
-        celxScript->handleTickEvent(dt);
+        m_script->handleTickEvent(dt);
         if (scriptState == ScriptRunning)
         {
-            bool finished = celxScript->tick(dt);
+            bool finished = m_script->tick(dt);
             if (finished)
                 cancelScript();
         }
     }
-
-    if (luaHook != nullptr)
-        luaHook->callLuaHook(this, "tick", dt);
-#endif // CELX
+    if (m_scriptHook != nullptr)
+        m_scriptHook->call("tick", dt);
 
     sim->update(dt);
 }
@@ -2343,55 +2089,43 @@ void CelestiaCore::draw()
         // I'm not certain that a special case for one view is required; but,
         // it's possible that there exists some broken hardware out there
         // that has to fall back to software rendering if the scissor test
-        // is enable.  To keep performance on this hypothetical hardware
+        // is enabled. To keep performance on this hypothetical hardware
         // reasonable in the typical single view case, we'll use this
-        // scissorless special case.  I'm only paranoid because I've been
+        // scissorless special case. I'm only paranoid because I've been
         // burned by crap hardware so many times. cjl
-        glViewport(0, 0, width, height);
-        renderer->resize(width, height);
+        renderer->setRenderRegion(0, 0, width, height, false);
         sim->render(*renderer);
     }
     else
     {
-        glEnable(GL_SCISSOR_TEST);
         for (const auto view : views)
         {
             if (view->type == View::ViewWindow)
             {
-                glScissor((GLint) (view->x * width),
-                          (GLint) (view->y * height),
-                          (GLsizei) (view->width * width),
-                          (GLsizei) (view->height * height));
-                glViewport((GLint) (view->x * width),
-                           (GLint) (view->y * height),
-                           (GLsizei) (view->width * width),
-                           (GLsizei) (view->height * height));
-                renderer->resize((int) (view->width * width),
-                                 (int) (view->height * height));
+                view->switchTo(width, height);
                 sim->render(*renderer, *view->observer);
             }
         }
-        glDisable(GL_SCISSOR_TEST);
-        glViewport(0, 0, width, height);
+        renderer->setRenderRegion(0, 0, width, height, false);
     }
 
-    GLboolean toggleAA = glIsEnabled(GL_MULTISAMPLE);
+    bool toggleAA = renderer->isMSAAEnabled();
     if (toggleAA && (renderer->getRenderFlags() & Renderer::ShowCloudMaps))
-        glDisable(GL_MULTISAMPLE);
+        renderer->disableMSAA();
 
     renderOverlay();
     if (showConsole)
     {
         console.setFont(font);
-        glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+        console.setColor(1.0f, 1.0f, 1.0f, 1.0f);
         console.begin();
-        glTranslatef(0.0f, 200.0f, 0.0f);
+        console.moveBy(0.0f, 200.0f, 0.0f);
         console.render(ConsolePageRows);
         console.end();
     }
 
     if (toggleAA)
-        glEnable(GL_MULTISAMPLE);
+        renderer->enableMSAA();
 
     if (movieCapture != nullptr && recording)
         movieCapture->captureFrame();
@@ -2420,9 +2154,11 @@ void CelestiaCore::resize(GLsizei w, GLsizei h)
     if (h == 0)
         h = 1;
 
-    glViewport(0, 0, w, h);
     if (renderer != nullptr)
+    {
+        renderer->setViewport(0, 0, w, h);
         renderer->resize(w, h);
+    }
     if (overlay != nullptr)
         overlay->setWindowSize(w, h);
     console.setScale(w, h);
@@ -2430,10 +2166,8 @@ void CelestiaCore::resize(GLsizei w, GLsizei h)
     height = h;
 
     setFOVFromZoom();
-#ifdef CELX
-    if (luaHook && luaHook->callLuaHook(this,"resize", (float) w, (float) h))
+    if (m_scriptHook != nullptr && m_scriptHook->call("resize", float(w), float(h)))
         return;
-#endif
 }
 
 
@@ -2485,88 +2219,35 @@ void CelestiaCore::setViewChanged()
 
 void CelestiaCore::splitView(View::Type type, View* av, float splitPos)
 {
-    setViewChanged();
+    if (type == View::ViewWindow)
+        return;
 
     if (av == nullptr)
-        av = (*activeView);
-    bool vertical = ( type == View::VerticalSplit );
-    Observer* o = sim->addObserver();
-    bool tooSmall = false;
+        av = *activeView;
 
-    switch (type) // If active view is too small, don't split it.
-    {
-    case View::HorizontalSplit:
-        if (av->height < 0.2f) tooSmall = true;
-        break;
-    case View::VerticalSplit:
-        if (av->width < 0.2f) tooSmall = true;
-        break;
-    case View::ViewWindow:
-        return;
-        break;
-    }
-
-    if (tooSmall)
+    if (!av->isSplittable(type))
     {
         flash(_("View too small to be split"));
         return;
     }
-    flash(_("Added view"));
+
+    setViewChanged();
+
+    Observer* o = sim->addObserver();
 
     // Make the new observer a copy of the old one
     // TODO: This works, but an assignment operator for Observer
     // should be defined.
     *o = *(sim->getActiveObserver());
 
-    float w1, h1, w2, h2;
-    if (vertical)
-    {
-        w1 = av->width * splitPos;
-        w2 = av->width - w1;
-        h1 = av->height;
-        h2 = av->height;
-    }
-    else
-    {
-        w1 = av->width;
-        w2 = av->width;
-        h1 = av->height * splitPos;
-        h2 = av->height - h1;
-    }
-
-    View* split = new View(type,
-                           0,
-                           av->x,
-                           av->y,
-                           av->width,
-                           av->height);
-    split->parent = av->parent;
-    if (av->parent != nullptr)
-    {
-        if (av->parent->child1 == av)
-            av->parent->child1 = split;
-        else
-            av->parent->child2 = split;
-    }
-    split->child1 = av;
-
-    av->width = w1;
-    av->height = h1;
-    av->parent = split;
-
-    View* view = new View(View::ViewWindow,
-                          o,
-                          av->x + (vertical ? w1 : 0),
-                          av->y + (vertical ? 0  : h1),
-                          w2, h2);
-    split->child2 = view;
-    view->parent = split;
-    view->zoom = av->zoom;
-
+    View* split, *view;
+    av->split(type, o, splitPos, &split, &view);
     views.push_back(split);
     views.push_back(view);
 
     setFOVFromZoom();
+
+    flash(_("Added view"));
 }
 
 void CelestiaCore::setFOVFromZoom()
@@ -2593,29 +2274,23 @@ void CelestiaCore::singleView(View* av)
     setViewChanged();
 
     if (av == nullptr)
-        av = (*activeView);
+        av = *activeView;
 
     list<View*>::iterator i = views.begin();
     while(i != views.end())
     {
         if ((*i) != av)
         {
-            sim->removeObserver((*i)->observer);
-            delete (*i)->observer;
+            sim->removeObserver((*i)->getObserver());
+            delete (*i)->getObserver();
             delete (*i);
-            i=views.erase(i);
+            i = views.erase(i);
         }
         else
-            i++;
+            ++i;
     }
 
-    av->x = 0.0f;
-    av->y = 0.0f;
-    av->width = 1.0f;
-    av->height = 1.0f;
-    av->parent = nullptr;
-    av->child1 = nullptr;
-    av->child2 = nullptr;
+    av->reset();
 
     activeView = views.begin();
     sim->setActiveObserver((*activeView)->observer);
@@ -2624,59 +2299,36 @@ void CelestiaCore::singleView(View* av)
 
 void CelestiaCore::setActiveView(View* v)
 {
-    activeView = find(views.begin(),views.end(),v);
+    activeView = find(views.begin(), views.end(), v);
     sim->setActiveObserver((*activeView)->observer);
 }
 
 void CelestiaCore::deleteView(View* v)
 {
     if (v == nullptr)
-        v = (*activeView);
+        v = *activeView;
 
-    if (v->parent == nullptr) return;
+    if (v->isRootView())
+        return;
 
     //Erase view and parent view from views
-    list<View*>::iterator i = views.begin();
-    while(i != views.end())
+    for (auto i = views.begin(); i != views.end(); )
     {
         if ((*i == v) || (*i == v->parent))
-            i=views.erase(i);
+            i = views.erase(i);
         else
-            i++;
+            ++i;
     }
 
-    int sign;
-    View *sibling;
-    if (v->parent->child1 == v)
-    {
-        sibling = v->parent->child2;
-        sign = -1;
-    }
-    else
-    {
-        sibling = v->parent->child1;
-        sign = 1;
-    }
-    sibling->parent = v->parent->parent;
-    if (v->parent->parent != nullptr) {
-        if (v->parent->parent->child1 == v->parent)
-            v->parent->parent->child1 = sibling;
-        else
-            v->parent->parent->child2 = sibling;
-    }
+    sim->removeObserver(v->getObserver());
+    delete(v->getObserver());
+    auto sibling = View::remove(v);
 
-    v->walkTreeResize(sibling, sign);
-
-    sim->removeObserver(v->observer);
-    delete(v->observer);
     View* nextActiveView = sibling;
     while (nextActiveView->type != View::ViewWindow)
         nextActiveView = nextActiveView->child1;
-    activeView = find(views.begin(),views.end(),nextActiveView);
+    activeView = find(views.begin(), views.end(), nextActiveView);
     sim->setActiveObserver((*activeView)->observer);
-
-    delete(v->parent);
-    delete(v);
 
     if (!showActiveViewFrame)
         flashFrameStart = currentTime;
@@ -2705,12 +2357,6 @@ void CelestiaCore::setActiveFrameVisible(bool visible)
     setViewChanged();
 
     showActiveViewFrame = visible;
-}
-
-
-void CelestiaCore::setContextMenuCallback(ContextMenuFunc callback)
-{
-    contextMenuCallback = callback;
 }
 
 
@@ -2762,7 +2408,7 @@ static string DistanceLyToStr(double distance)
     }
     else if (abs(distance) >= 0.5 * astro::parsecsToLightYears(1e+3))
     {
-        units = _("Kpc");
+        units = _("kpc");
         distance = astro::lightYearsToParsecs(distance) / 1e+3;
     }
     else if (abs(distance) >= astro::AUtoLightYears(1000.0f))
@@ -2778,11 +2424,13 @@ static string DistanceLyToStr(double distance)
     {
         units = _("km");
         distance = astro::lightYearsToKilometers(distance);
+        return fmt::sprintf("%.2f %s", distance, units);
     }
     else
     {
         units = _("m");
         distance = astro::lightYearsToKilometers(distance) * 1000.0f;
+        return fmt::sprintf("%.2f %s", distance, units);
     }
 
     return fmt::sprintf("%s %s", SigDigitNum(distance, 5), units);
@@ -2801,15 +2449,37 @@ static void displayRotationPeriod(Overlay& overlay, double days)
     const char *p;
 
     if (days > 1.0)
-        n = FormattedNumber(days, 3, FormattedNumber::GroupThousands), p = _("days");
+    {
+        n = FormattedNumber(days, 3, FormattedNumber::GroupThousands);
+        p = _("days");
+    }
     else if (days > 1.0 / 24.0)
-        n = FormattedNumber(days * 24.0, 3, FormattedNumber::GroupThousands), p = _("hours");
+    {
+        n = FormattedNumber(days * 24.0, 3, FormattedNumber::GroupThousands);
+        p = _("hours");
+    }
     else if (days > 1.0 / (24.0 * 60.0))
-        n = FormattedNumber(days * 24.0 * 60.0, 3, FormattedNumber::GroupThousands), p = _("minutes");
+    {
+        n = FormattedNumber(days * 24.0 * 60.0, 3, FormattedNumber::GroupThousands);
+        p = _("minutes");
+    }
     else
-        n = FormattedNumber(days * 24.0 * 60.0 * 60.0, 3, FormattedNumber::GroupThousands), p = _("seconds");
+    {
+        n = FormattedNumber(days * 24.0 * 60.0 * 60.0, 3, FormattedNumber::GroupThousands);
+        p = _("seconds");
+    }
 
     fmt::fprintf(overlay, _("Rotation period: %s %s\n"), n, p);
+}
+
+static void displayMass(Overlay& overlay, float mass)
+{
+    if (mass < 0.001f)
+        fmt::fprintf(overlay, _("Mass: %.6g kg\n"), mass * astro::EarthMass);
+    else if (mass > 50)
+        fmt::fprintf(overlay, _("Mass: %.2f Mj\n"), mass * astro::EarthMass / astro::JupiterMass);
+    else
+        fmt::fprintf(overlay, _("Mass: %.2f Me\n"), mass);
 }
 
 static void displaySpeed(Overlay& overlay, float speed)
@@ -2818,15 +2488,30 @@ static void displaySpeed(Overlay& overlay, float speed)
     const char *u;
 
     if (speed < 1.0f)
-        n = SigDigitNum(speed * 1000.0f, 3), u = _("m/s");
+    {
+        n = SigDigitNum(speed * 1000.0f, 3);
+        u = _("m/s");
+    }
     else if (speed < 10000.0f)
-        n = SigDigitNum(speed, 3), u = _("km/s");
+    {
+        n = SigDigitNum(speed, 3);
+        u = _("km/s");
+    }
     else if (speed < (float) astro::speedOfLight * 100.0f)
-        n = SigDigitNum(speed / astro::speedOfLight, 3), u = "c";
+    {
+        n = SigDigitNum(speed / astro::speedOfLight, 3);
+        u = "c";
+    }
     else if (speed < astro::AUtoKilometers(1000.0f))
-        n = SigDigitNum(astro::kilometersToAU(speed), 3), u = _("AU/s");
+    {
+        n = SigDigitNum(astro::kilometersToAU(speed), 3);
+        u = _("AU/s");
+    }
     else
-        n = SigDigitNum(astro::kilometersToLightYears(speed), 3), u = _("ly/s");
+    {
+        n = SigDigitNum(astro::kilometersToLightYears(speed), 3);
+        u = _("ly/s");
+    }
 
     fmt::fprintf(overlay, _("Speed: %s %s\n"), n, u);
 }
@@ -3174,18 +2859,12 @@ static void displayPlanetInfo(Overlay& overlay,
         if (body.getRotationModel(t)->isPeriodic())
             displayRotationPeriod(overlay, body.getRotationModel(t)->getPeriod());
 
-        if (body.getName() != "Earth")
-        {
-            if (body.getMass() > 0)
-                fmt::fprintf(overlay, _("Mass: %.2f Me\n"), body.getMass());
-        }
+        if (body.getName() != "Earth" && body.getMass() > 0)
+            displayMass(overlay, body.getMass());
 
         float density = body.getDensity();
         if (density > 0)
-        {
             fmt::fprintf(overlay, _("Density: %.2f x 1000 kg/m^3\n"), density / 1000.0);
-        }
-
 
         float planetTemp = body.getTemperature(t);
         if (planetTemp > 0)
@@ -3219,7 +2898,7 @@ static string getSelectionName(const Selection& sel, const Universe& univ)
     case Selection::Type_DeepSky:
         return univ.getDSOCatalog()->getDSOName(sel.deepsky(), false);
     case Selection::Type_Star:
-        return ReplaceGreekLetterAbbr(univ.getStarCatalog()->getStarName(*sel.star(), true));
+        return univ.getStarCatalog()->getStarName(*sel.star(), true);
     case Selection::Type_Location:
         return sel.location()->getName(false);
     default:
@@ -3242,7 +2921,7 @@ static void displaySelectionName(Overlay& overlay,
         break;
     case Selection::Type_Star:
         //displayStarName(overlay, *(sel.star()), *univ.getStarCatalog());
-        overlay << ReplaceGreekLetterAbbr(univ.getStarCatalog()->getStarName(*sel.star(), true));
+        overlay << univ.getStarCatalog()->getStarName(*sel.star(), true);
         break;
     case Selection::Type_Location:
         overlay << sel.location()->getName(true);
@@ -3254,87 +2933,17 @@ static void displaySelectionName(Overlay& overlay,
 #endif
 
 
-static void showViewFrame(const View* v, int width, int height)
+void CelestiaCore::setScriptImage(std::unique_ptr<OverlayImage> &&_image)
 {
-    glBegin(GL_LINE_LOOP);
-    glVertex3f(v->x * width, v->y * height, 0.0f);
-    glVertex3f(v->x * width, (v->y + v->height) * height - 1, 0.0f);
-    glVertex3f((v->x + v->width) * width - 1, (v->y + v->height) * height - 1, 0.0f);
-    glVertex3f((v->x + v->width) * width - 1, v->y * height, 0.0f);
-    glEnd();
-}
-
-
-void CelestiaCore::setScriptImage(float duration,
-                                  float xoffset,
-                                  float yoffset,
-                                  float alpha,
-                                  const string& filename,
-                                  bool fitscreen)
-{
-    if (!image || !image->isNewImage(filename))
-    {
-        delete image;
-        image = new CelestiaCore::OverlayImage(filename);
-    }
+    image = std::move(_image);
     image->setStartTime((float) currentTime);
-    image->setDuration(duration);
-    image->setOffset(xoffset, yoffset);
-    image->setAlpha(alpha);
-    image->fitScreen(fitscreen);
 }
-
-
-CelestiaCore::OverlayImage::OverlayImage(string f)
-{
-    filename = std::move(f);
-    delete texture;
-    texture = LoadTextureFromFile(string("images/") + filename);
-}
-
-
-void CelestiaCore::OverlayImage::render(float curr_time, int width, int height)
-{
-    if (!texture || (curr_time >= start + duration))
-        return;
-
-    float xSize = texture->getWidth();
-    float ySize = texture->getHeight();
-
-    // center overlay image horizontally if offsetX = 0
-    float left = (width * (1 + offsetX) - xSize)/2;
-    // center overlay image vertically if offsetY = 0
-    float bottom = (height * (1 + offsetY) - ySize)/2;
-
-    if (fitscreen)
-    {
-        float coeffx = xSize / width;  // overlay pict width/view window width ratio
-        float coeffy = ySize / height; // overlay pict height/view window height ratio
-        xSize = xSize / coeffx;        // new overlay picture width size to fit viewport
-        ySize = ySize / coeffy;        // new overlay picture height to fit viewport
-
-        left = (width - xSize) / 2;    // to be sure overlay pict is centered in viewport
-        bottom = 0;                    // overlay pict locked at bottom of screen
-    }
-
-    glEnable(GL_TEXTURE_2D);
-    texture->bind();
-
-    glBegin(GL_TRIANGLE_FAN);
-    glColor4f(1.0f, 1.0f, 1.0f, alpha);
-    glTexCoord2f(0.0f, 1.0f); glVertex2f(left, bottom);
-    glTexCoord2f(1.0f, 1.0f); glVertex2f(left + xSize, bottom);
-    glTexCoord2f(1.0f, 0.0f); glVertex2f(left + xSize, bottom + ySize);
-    glTexCoord2f(0.0f, 0.0f); glVertex2f(left, bottom + ySize);
-    glEnd();
-}
-
 
 void CelestiaCore::renderOverlay()
 {
-#ifdef CELX
-    if (luaHook) luaHook->callLuaHook(this, "renderoverlay");
-#endif
+    if (m_scriptHook != nullptr)
+        m_scriptHook->call("renderoverlay");
+
     if (font == nullptr)
         return;
 
@@ -3346,50 +2955,33 @@ void CelestiaCore::renderOverlay()
 
     overlay->begin();
 
-#ifdef CELX
-    if (runningScript || celxScript)
-    {
-#else
-    if (runningScript)
-    {
-#endif
-        if (image)
-            image->render((float) currentTime, width, height);
-    }
+    if (m_script != nullptr && image != nullptr)
+        image->render((float) currentTime, width, height);
 
     if (views.size() > 1)
     {
         // Render a thin border arround all views
         if (showViewFrames || resizeSplit)
         {
-            glLineWidth(1.0f);
-            glDisable(GL_TEXTURE_2D);
-            glColor4f(0.5f, 0.5f, 0.5f, 1.0f);
             for(const auto v : views)
+            {
                 if (v->type == View::ViewWindow)
-                    showViewFrame(v, width, height);
+                    v->drawBorder(width, height, frameColor);
+            }
         }
-        glLineWidth(1.0f);
 
         // Render a very simple border around the active view
-        View* av = (*activeView);
+        View* av = *activeView;
 
         if (showActiveViewFrame)
         {
-            glLineWidth(2.0f);
-            glDisable(GL_TEXTURE_2D);
-            glColor4f(0.5f, 0.5f, 1.0f, 1.0f);
-            showViewFrame(av, width, height);
-            glLineWidth(1.0f);
+            av->drawBorder(width, height, activeFrameColor, 2);
         }
 
         if (currentTime < flashFrameStart + 0.5)
         {
-            glLineWidth(8.0f);
-            glColor4f(0.5f, 0.5f, 1.0f,
-                      (float) (1.0 - (currentTime - flashFrameStart) / 0.5));
-            showViewFrame(av, width, height);
-            glLineWidth(1.0f);
+            float alpha = (float) (1.0 - (currentTime - flashFrameStart) / 0.5);
+            av->drawBorder(width, height, {activeFrameColor, alpha}, 8);
         }
     }
 
@@ -3417,20 +3009,18 @@ void CelestiaCore::renderOverlay()
         if (dateWidth > dateStrWidth) dateStrWidth = dateWidth;
 
         // Time and date
-        glPushMatrix();
-        glColor4f(0.7f, 0.7f, 1.0f, 1.0f);
-        glTranslatef( (float) (width - dateStrWidth),
-                      (float) (height - fontHeight),
-                      0.0f);
+        overlay->savePos();
+        overlay->setColor(0.7f, 0.7f, 1.0f, 1.0f);
+        overlay->moveBy(width - dateStrWidth, height - fontHeight);
         overlay->beginText();
 
         overlay->print(dateStr);
 
         if (lightTravelFlag && lt > 0.0)
         {
-            glColor4f(0.42f, 1.0f, 1.0f, 1.0f);
+            overlay->setColor(0.42f, 1.0f, 1.0f, 1.0f);
             *overlay << _("  LT");
-            glColor4f(0.7f, 0.7f, 1.0f, 1.0f);
+            overlay->setColor(0.7f, 0.7f, 1.0f, 1.0f);
         }
         *overlay << '\n';
 
@@ -3457,33 +3047,44 @@ void CelestiaCore::renderOverlay()
 
             if (sim->getPauseState() == true)
             {
-                glColor4f(1.0f, 0.0f, 0.0f, 1.0f);
+                overlay->setColor(1.0f, 0.0f, 0.0f, 1.0f);
                 *overlay << _(" (Paused)");
             }
         }
 
         overlay->endText();
-        glPopMatrix();
+        overlay->restorePos();
     }
 
     if (hudDetail > 0 && (overlayElements & ShowVelocity))
     {
         // Speed
-        glPushMatrix();
-        glTranslatef(0.0f, (float) (fontHeight * 2 + 5), 0.0f);
-        glColor4f(0.7f, 0.7f, 1.0f, 1.0f);
+        overlay->savePos();
+        overlay->moveBy(0.0f, fontHeight * 2 + 5);
+        overlay->setColor(0.7f, 0.7f, 1.0f, 1.0f);
 
         overlay->beginText();
         *overlay << '\n';
         if (showFPSCounter)
+#ifdef OCTREE_DEBUG
+            fmt::fprintf(*overlay, _("FPS: %.1f, vis. stars stats: [ %zu : %zu : %zu ], vis. DSOs stats: [ %zu : %zu : %zu ]\n"),
+                         fps,
+                         getRenderer()->m_starProcStats.objects,
+                         getRenderer()->m_starProcStats.nodes,
+                         getRenderer()->m_starProcStats.height,
+                         getRenderer()->m_dsoProcStats.objects,
+                         getRenderer()->m_dsoProcStats.nodes,
+                         getRenderer()->m_dsoProcStats.height);
+#else
             fmt::fprintf(*overlay, _("FPS: %.1f\n"), fps);
+#endif
         else
             *overlay << '\n';
 
         displaySpeed(*overlay, sim->getObserver().getVelocity().norm());
 
         overlay->endText();
-        glPopMatrix();
+        overlay->restorePos();
     }
 
     Universe *u = sim->getUniverse();
@@ -3491,11 +3092,10 @@ void CelestiaCore::renderOverlay()
     if (hudDetail > 0 && (overlayElements & ShowFrame))
     {
         // Field of view and camera mode in lower right corner
-        glPushMatrix();
-        glTranslatef((float) (width - emWidth * 15),
-                     (float) (fontHeight * 3 + 5), 0.0f);
+        overlay->savePos();
+        overlay->moveBy(width - emWidth * 15, fontHeight * 3 + 5);
         overlay->beginText();
-        glColor4f(0.6f, 0.6f, 1.0f, 1);
+        overlay->setColor(0.6f, 0.6f, 1.0f, 1);
 
         if (sim->getObserverMode() == Observer::Travelling)
         {
@@ -3553,23 +3153,23 @@ void CelestiaCore::renderOverlay()
             }
         }
 
-        glColor4f(0.7f, 0.7f, 1.0f, 1.0f);
+        overlay->setColor(0.7f, 0.7f, 1.0f, 1.0f);
 
         // Field of view
         float fov = radToDeg(sim->getActiveObserver()->getFOV());
         fmt::fprintf(*overlay, _("FOV: %s (%.2fx)\n"),
                               angleToStr(fov), (*activeView)->zoom);
         overlay->endText();
-        glPopMatrix();
+        overlay->restorePos();
     }
 
     // Selection info
     Selection sel = sim->getSelection();
     if (!sel.empty() && hudDetail > 0 && (overlayElements & ShowSelection))
     {
-        glPushMatrix();
-        glColor4f(0.7f, 0.7f, 1.0f, 1.0f);
-        glTranslatef(0.0f, (float) (height - titleFont->getHeight()), 0.0f);
+        overlay->savePos();
+        overlay->setColor(0.7f, 0.7f, 1.0f, 1.0f);
+        overlay->moveBy(0.0f, height - titleFont->getHeight());
 
         overlay->beginText();
         Vector3d v = sel.getPosition(sim->getTime()).offsetFromKm(sim->getObserver().getPosition());
@@ -3585,7 +3185,7 @@ void CelestiaCore::renderOverlay()
                     // Skip displaying the English name if a localized version is present.
                     string starName = sim->getUniverse()->getStarCatalog()->getStarName(*sel.star());
                     string locStarName = sim->getUniverse()->getStarCatalog()->getStarName(*sel.star(), true);
-                    if (sel.star()->getCatalogNumber() == 0 && selectionNames.find("Sun") != string::npos && (const char*) "Sun" != _("Sun"))
+                    if (sel.star()->getIndex() == 0 && selectionNames.find("Sun") != string::npos && (const char*) "Sun" != _("Sun"))
                     {
                         string::size_type startPos = selectionNames.find("Sun");
                         string::size_type endPos = selectionNames.find(_("Sun"));
@@ -3647,11 +3247,11 @@ void CelestiaCore::renderOverlay()
 
                     // Skip displaying the primary name if there's a localized version
                     // of the name.
-                    vector<string>::const_iterator firstName = names.begin();
+                    auto firstName = names.begin();
                     if (sel.body()->hasLocalizedName())
-                        firstName++;
+                        ++firstName;
 
-                    for (vector<string>::const_iterator iter = firstName; iter != names.end(); iter++)
+                    for (auto iter = firstName; iter != names.end(); ++iter)
                     {
                         if (iter != firstName)
                             selectionNames += " / ";
@@ -3690,9 +3290,7 @@ void CelestiaCore::renderOverlay()
             *overlay << sel.location()->getName(true).c_str();
             overlay->setFont(font);
             *overlay << '\n';
-            displayLocationInfo(*overlay,
-                                *(sel.location()),
-                                v.norm());
+            displayLocationInfo(*overlay, *(sel.location()), v.norm());
             break;
 
         default:
@@ -3749,21 +3347,21 @@ void CelestiaCore::renderOverlay()
         }
 
         overlay->endText();
-
-        glPopMatrix();
+        overlay->restorePos();
     }
 
     // Text input
     if (textEnterMode & KbAutoComplete)
     {
         overlay->setFont(titleFont);
-        glPushMatrix();
-        glColor4f(0.7f, 0.7f, 1.0f, 0.2f);
-        overlay->rect(0.0f, 0.0f, (float) width, 100.0f);
-        glTranslatef(0.0f, fontHeight * 3.0f + 35.0f, 0.0f);
-        glColor4f(0.6f, 0.6f, 1.0f, 1.0f);
+        overlay->savePos();
+        Rect r(0, 0, width, 100);
+        r.setColor(consoleColor);
+        overlay->drawRectangle(r);
+        overlay->moveBy(0.0f, fontHeight * 3.0f + 35.0f);
+        overlay->setColor(0.6f, 0.6f, 1.0f, 1.0f);
         overlay->beginText();
-        *overlay << _("Target name: ") << ReplaceGreekLetterAbbr(typedText);
+        fmt::fprintf(*overlay, _("Target name: %s"), typedText);
         overlay->endText();
         overlay->setFont(font);
         if (typedTextCompletion.size() >= 1)
@@ -3771,7 +3369,7 @@ void CelestiaCore::renderOverlay()
             int nb_cols = 4;
             int nb_lines = 3;
             int start = 0;
-            glTranslatef(3.0f, -font->getHeight() - 3.0f, 0.0f);
+            overlay->moveBy(3.0f, -font->getHeight() - 3.0f);
             vector<std::string>::const_iterator iter = typedTextCompletion.begin();
             if (typedTextCompletionIdx >= nb_cols * nb_lines)
             {
@@ -3780,22 +3378,22 @@ void CelestiaCore::renderOverlay()
             }
             for (int i=0; iter < typedTextCompletion.end() && i < nb_cols; i++)
             {
-                glPushMatrix();
+                overlay->savePos();
                 overlay->beginText();
                 for (int j = 0; iter < typedTextCompletion.end() && j < nb_lines; iter++, j++)
                 {
                     if (i * nb_lines + j == typedTextCompletionIdx - start)
-                        glColor4f(1.0f, 0.6f, 0.6f, 1);
+                        overlay->setColor(1.0f, 0.6f, 0.6f, 1);
                     else
-                        glColor4f(0.6f, 0.6f, 1.0f, 1);
-                    *overlay << ReplaceGreekLetterAbbr(*iter) << "\n";
+                        overlay->setColor(0.6f, 0.6f, 1.0f, 1);
+                    *overlay << *iter << "\n";
                 }
                 overlay->endText();
-                glPopMatrix();
-                glTranslatef((float) (width/nb_cols), 0.0f, 0.0f);
+                overlay->restorePos();
+                overlay->moveBy((float) (width/nb_cols), 0.0f, 0.0f);
            }
         }
-        glPopMatrix();
+        overlay->restorePos();
         overlay->setFont(font);
     }
 
@@ -3819,17 +3417,17 @@ void CelestiaCore::renderOverlay()
             y -= fontHeight;
 
         overlay->setFont(titleFont);
-        glPushMatrix();
+        overlay->savePos();
 
         float alpha = 1.0f;
         if (currentTime > messageStart + messageDuration - 0.5)
             alpha = (float) ((messageStart + messageDuration - currentTime) / 0.5);
-        glColor4f(textColor.red(), textColor.green(), textColor.blue(), alpha);
-        glTranslatef((float) x, (float) y, 0.0f);
+        overlay->setColor(textColor.red(), textColor.green(), textColor.blue(), alpha);
+        overlay->moveBy(x, y);
         overlay->beginText();
         *overlay << messageText;
         overlay->endText();
-        glPopMatrix();
+        overlay->restorePos();
         overlay->setFont(font);
     }
 
@@ -3837,14 +3435,18 @@ void CelestiaCore::renderOverlay()
     {
         int movieWidth = movieCapture->getWidth();
         int movieHeight = movieCapture->getHeight();
-        glPushMatrix();
-        glColor4f(1, 0, 0, 1);
-        overlay->rect((float) ((width - movieWidth) / 2 - 1),
-                      (float) ((height - movieHeight) / 2 - 1),
-                      (float) (movieWidth + 1),
-                      (float) (movieHeight + 1), false);
-        glTranslatef((float) ((width - movieWidth) / 2),
-                     (float) ((height + movieHeight) / 2 + 2), 0.0f);
+        overlay->savePos();
+        Color color(1.0f, 0.0f, 0.0f, 1.0f);
+        overlay->setColor(color);
+        Rect r((width - movieWidth) / 2 - 1,
+               (height - movieHeight) / 2 - 1,
+               movieWidth + 1,
+               movieHeight + 1);
+        r.setColor(color);
+        r.setType(Rect::Type::BorderOnly);
+        overlay->drawRectangle(r);
+        overlay->moveBy((float) ((width - movieWidth) / 2),
+                        (float) ((height + movieHeight) / 2 + 2));
         overlay->beginText();
         fmt::fprintf(*overlay, _("%dx%d at %f fps  %s"),
                               movieWidth, movieHeight,
@@ -3852,12 +3454,11 @@ void CelestiaCore::renderOverlay()
                               recording ? _("Recording") : _("Paused"));
 
         overlay->endText();
-        glPopMatrix();
+        overlay->restorePos();
 
-        glPushMatrix();
-        glTranslatef((float) ((width + movieWidth) / 2 - emWidth * 5),
-                     (float) ((height + movieHeight) / 2 + 2),
-                     0.0f);
+        overlay->savePos();
+        overlay->moveBy((float) ((width + movieWidth) / 2 - emWidth * 5),
+                        (float) ((height + movieHeight) / 2 + 2));
         float sec = movieCapture->getFrameCount() /
             movieCapture->getFrameRate();
         auto min = (int) (sec / 60);
@@ -3865,73 +3466,27 @@ void CelestiaCore::renderOverlay()
         overlay->beginText();
         fmt::fprintf(*overlay, "%3d:%05.2f", min, sec);
         overlay->endText();
-        glPopMatrix();
+        overlay->restorePos();
 
-        glPushMatrix();
-        glTranslatef((float) ((width - movieWidth) / 2),
-                     (float) ((height - movieHeight) / 2 - fontHeight - 2),
-                     0.0f);
+        overlay->savePos();
+        overlay->moveBy((float) ((width - movieWidth) / 2),
+                        (float) ((height - movieHeight) / 2 - fontHeight - 2));
         overlay->beginText();
         *overlay << _("F11 Start/Pause    F12 Stop");
         overlay->endText();
-        glPopMatrix();
+        overlay->restorePos();
 
-        glPopMatrix();
+        overlay->restorePos();
     }
 
     if (editMode)
     {
-        glPushMatrix();
-        glTranslatef((float) ((width - font->getWidth(_("Edit Mode"))) / 2),
-                     (float) (height - fontHeight), 0.0f);
-        glColor4f(1, 0, 1, 1);
+        overlay->savePos();
+        overlay->moveBy((float) ((width - font->getWidth(_("Edit Mode"))) / 2),
+                        (float) (height - fontHeight));
+        overlay->setColor(1, 0, 1, 1);
         *overlay << _("Edit Mode");
-        glPopMatrix();
-    }
-
-    // Show logo at start
-    if (logoTexture != nullptr)
-    {
-        glEnable(GL_TEXTURE_2D);
-        if (currentTime < 5.0)
-        {
-            int xSize = (int) (logoTexture->getWidth() * 0.8f);
-            int ySize = (int) (logoTexture->getHeight() * 0.8f);
-            int left = (width - xSize) / 2;
-            int bottom = height / 2;
-
-            float topAlpha, botAlpha;
-            if (currentTime < 4.0)
-            {
-                botAlpha = (float) clamp(currentTime / 1.0);
-                topAlpha = (float) clamp(currentTime / 4.0);
-            }
-            else
-            {
-                botAlpha = topAlpha = (float) (5.0 - currentTime);
-            }
-
-            logoTexture->bind();
-            glBegin(GL_QUADS);
-            glColor4f(0.8f, 0.8f, 1.0f, botAlpha);
-            //glColor4f(1.0f, 1.0f, 1.0f, botAlpha);
-            glTexCoord2f(0.0f, 1.0f);
-            glVertex2i(left, bottom);
-            glTexCoord2f(1.0f, 1.0f);
-            glVertex2i(left + xSize, bottom);
-            glColor4f(0.6f, 0.6f, 1.0f, topAlpha);
-            //glColor4f(1.0f, 1.0f, 1.0f, topAlpha);
-            glTexCoord2f(1.0f, 0.0f);
-            glVertex2i(left + xSize, bottom + ySize);
-            glTexCoord2f(0.0f, 0.0f);
-            glVertex2i(left, bottom + ySize);
-            glEnd();
-        }
-        else
-        {
-            delete logoTexture;
-            logoTexture = nullptr;
-        }
+        overlay->restorePos();
     }
 
     overlay->end();
@@ -3939,43 +3494,41 @@ void CelestiaCore::renderOverlay()
 }
 
 
-class SolarSystemLoader : public EnumFilesHandler
+class SolarSystemLoader
 {
- public:
     Universe* universe;
     ProgressNotifier* notifier;
+
+ public:
     SolarSystemLoader(Universe* u, ProgressNotifier* pn) : universe(u), notifier(pn) {};
 
-    bool process(const string& filename)
+    void process(const fs::path& filepath)
     {
-        if (DetermineFileType(filename) == Content_CelestiaCatalog)
+        if (DetermineFileType(filepath) != Content_CelestiaCatalog)
+            return;
+
+        fmt::fprintf(clog, _("Loading solar system catalog: %s\n"), filepath.string());
+        if (notifier != nullptr)
+            notifier->update(filepath.filename().string());
+
+        ifstream solarSysFile(filepath.string(), ios::in);
+        if (solarSysFile.good())
         {
-            string fullname = getPath() + '/' + filename;
-            fmt::fprintf(clog, _("Loading solar system catalog: %s\n"), fullname);
-            if (notifier != nullptr)
-                notifier->update(filename);
-
-            ifstream solarSysFile(fullname, ios::in);
-            if (solarSysFile.good())
-            {
-                LoadSolarSystemObjects(solarSysFile,
-                                       *universe,
-                                       getPath());
-            }
+            LoadSolarSystemObjects(solarSysFile,
+                                   *universe,
+                                   filepath.parent_path());
         }
-
-        return true;
     };
 };
 
-template <class OBJDB> class CatalogLoader : public EnumFilesHandler
+template <class OBJDB> class CatalogLoader
 {
-public:
     OBJDB*      objDB;
     string      typeDesc;
     ContentType contentType;
     ProgressNotifier* notifier;
 
+ public:
     CatalogLoader(OBJDB* db,
                   const std::string& typeDesc,
                   const ContentType& contentType,
@@ -3987,27 +3540,21 @@ public:
     {
     }
 
-    bool process(const string& filename)
+    void process(const fs::path& filepath)
     {
-        if (DetermineFileType(filename) == contentType)
-        {
-            string fullname = getPath() + '/' + filename;
-            fmt::fprintf(clog, _("Loading %s catalog: %s\n"), typeDesc, fullname);
-            if (notifier)
-                notifier->update(filename);
+        if (DetermineFileType(filepath) != contentType)
+            return;
 
-            ifstream catalogFile(fullname, ios::in);
-            if (catalogFile.good())
-            {
-                bool success = objDB->load(catalogFile, getPath());
-                if (!success)
-                {
-                    //DPRINTF(0, _("Error reading star file: %s\n"), fullname.c_str());
-                    DPRINTF(0, "Error reading %s catalog file: %s\n", typeDesc.c_str(), fullname.c_str());
-                }
-            }
+        fmt::fprintf(clog, _("Loading %s catalog: %s\n"), typeDesc, filepath.string());
+        if (notifier != nullptr)
+            notifier->update(filepath.filename().string());
+
+        ifstream catalogFile(filepath.string(), ios::in);
+        if (catalogFile.good())
+        {
+            if (!objDB->load(catalogFile, filepath.parent_path()))
+                DPRINTF(LOG_LEVEL_ERROR, "Error reading %s catalog file: %s\n", typeDesc.c_str(), filepath.string());
         }
-        return true;
     }
 };
 
@@ -4015,8 +3562,8 @@ using StarLoader = CatalogLoader<StarDatabase>;
 using DeepSkyLoader = CatalogLoader<DSODatabase>;
 
 
-bool CelestiaCore::initSimulation(const string& configFileName,
-                                  const vector<string>& extrasDirs,
+bool CelestiaCore::initSimulation(const fs::path& configFileName,
+                                  const vector<fs::path>& extrasDirs,
                                   ProgressNotifier* progressNotifier)
 {
     if (!configFileName.empty())
@@ -4027,8 +3574,8 @@ bool CelestiaCore::initSimulation(const string& configFileName,
     {
         config = ReadCelestiaConfig("celestia.cfg");
 
-        string localConfigFile = WordExp("~/.celestia.cfg");
-        if (localConfigFile != "")
+        fs::path localConfigFile = PathExp("~/.celestia.cfg");
+        if (!localConfigFile.empty())
             ReadCelestiaConfig(localConfigFile, config);
     }
 
@@ -4053,20 +3600,17 @@ bool CelestiaCore::initSimulation(const string& configFileName,
     // Insert additional extras directories into the configuration. These
     // additional directories typically come from the command line. It may
     // be useful to permit other command line overrides of config file fields.
-    if (!extrasDirs.empty())
+    // Only insert the additional extras directories that aren't also
+    // listed in the configuration file. The additional directories are added
+    // after the ones from the config file and the order in which they were
+    // specified is preserved. This process in O(N*M), but the number of
+    // additional extras directories should be small.
+    for (const auto& dir : extrasDirs)
     {
-        // Only insert the additional extras directories that aren't also
-        // listed in the configuration file. The additional directories are added
-        // after the ones from the config file and the order in which they were
-        // specified is preserved. This process in O(N*M), but the number of
-        // additional extras directories should be small.
-        for (const auto& dir : extrasDirs)
+        if (find(config->extrasDirs.begin(), config->extrasDirs.end(), dir.string()) ==
+            config->extrasDirs.end())
         {
-            if (find(config->extrasDirs.begin(), config->extrasDirs.end(), dir) ==
-                config->extrasDirs.end())
-            {
-                config->extrasDirs.push_back(dir);
-            }
+            config->extrasDirs.push_back(dir.string());
         }
     }
 
@@ -4107,9 +3651,9 @@ bool CelestiaCore::initSimulation(const string& configFileName,
     for (const auto& file : config->dsoCatalogFiles)
     {
         if (progressNotifier)
-            progressNotifier->update(file);
+            progressNotifier->update(file.string());
 
-        ifstream dsoFile(file, ios::in);
+        ifstream dsoFile(file.string(), ios::in);
         if (!dsoFile.good())
         {
             warning(fmt::sprintf(_("Error opening deepsky catalog file %s.\n"), file));
@@ -4121,23 +3665,17 @@ bool CelestiaCore::initSimulation(const string& configFileName,
     }
 
     // Next, read all the deep sky files in the extras directories
+    for (const auto& dir : config->extrasDirs)
     {
-        for (const auto& _dir : config->extrasDirs)
-        {
-            if (_dir != "")
-            {
-                Directory* dir = OpenDirectory(_dir);
+        if (!is_valid_directory(dir))
+            continue;
 
-                DeepSkyLoader loader(dsoDB,
-                                     "deep sky object",
-                                     Content_CelestiaDeepSkyCatalog,
-                                     progressNotifier);
-                loader.pushDir(_dir);
-                dir->enumFiles(loader, true);
-
-                delete dir;
-            }
-        }
+        DeepSkyLoader loader(dsoDB,
+                             "deep sky object",
+                             Content_CelestiaDeepSkyCatalog,
+                             progressNotifier);
+        for (const auto& fn : fs::recursive_directory_iterator(dir))
+            loader.process(fn);
     }
     dsoDB->finish();
     universe->setDSOCatalog(dsoDB);
@@ -4152,41 +3690,37 @@ bool CelestiaCore::initSimulation(const string& configFileName,
         for (const auto& file : config->solarSystemFiles)
         {
             if (progressNotifier)
-                progressNotifier->update(file);
+                progressNotifier->update(file.string());
 
-            ifstream solarSysFile(file, ios::in);
+            ifstream solarSysFile(file.string(), ios::in);
             if (!solarSysFile.good())
             {
                 warning(fmt::sprintf(_("Error opening solar system catalog %s.\n"), file));
             }
             else
             {
-                LoadSolarSystemObjects(solarSysFile, *universe, "");
+                LoadSolarSystemObjects(solarSysFile, *universe);
             }
         }
     }
 
     // Next, read all the solar system files in the extras directories
     {
-        for (const auto& _dir : config->extrasDirs)
+        for (const auto& dir : config->extrasDirs)
         {
-            if (_dir != "")
-            {
-                Directory* dir = OpenDirectory(_dir);
+            if (!is_valid_directory(dir))
+                continue;
 
-                SolarSystemLoader loader(universe, progressNotifier);
-                loader.pushDir(_dir);
-                dir->enumFiles(loader, true);
-
-                delete dir;
-            }
+            SolarSystemLoader loader(universe, progressNotifier);
+            for (const auto& fn : fs::recursive_directory_iterator(dir))
+                loader.process(fn);
         }
     }
 
     // Load asterisms:
-    if (config->asterismsFile != "")
+    if (!config->asterismsFile.empty())
     {
-        ifstream asterismsFile(config->asterismsFile, ios::in);
+        ifstream asterismsFile(config->asterismsFile.string(), ios::in);
         if (!asterismsFile.good())
         {
             warning(fmt::sprintf(_("Error opening asterisms file %s.\n"),
@@ -4200,9 +3734,9 @@ bool CelestiaCore::initSimulation(const string& configFileName,
         }
     }
 
-    if (config->boundariesFile != "")
+    if (!config->boundariesFile.empty())
     {
-        ifstream boundariesFile(config->boundariesFile, ios::in);
+        ifstream boundariesFile(config->boundariesFile.string(), ios::in);
         if (!boundariesFile.good())
         {
             warning(fmt::sprintf(_("Error opening constellation boundaries file %s.\n"),
@@ -4216,10 +3750,10 @@ bool CelestiaCore::initSimulation(const string& configFileName,
     }
 
     // Load destinations list
-    if (config->destinationsFile != "")
+    if (!config->destinationsFile.empty())
     {
-        string localeDestinationsFile = LocaleFilename(config->destinationsFile);
-        ifstream destfile(localeDestinationsFile);
+        fs::path localeDestinationsFile = LocaleFilename(config->destinationsFile);
+        ifstream destfile(localeDestinationsFile.string());
         if (destfile.good())
         {
             destinations = ReadDestinationList(destfile);
@@ -4227,10 +3761,12 @@ bool CelestiaCore::initSimulation(const string& configFileName,
     }
 
     sim = new Simulation(universe);
-    if((renderer->getRenderFlags() & Renderer::ShowAutoMag) == 0)
-    sim->setFaintestVisible(config->faintestVisible);
+    if ((renderer->getRenderFlags() & Renderer::ShowAutoMag) == 0)
+    {
+        sim->setFaintestVisible(config->faintestVisible);
+    }
 
-    View* view = new View(View::ViewWindow, sim->getActiveObserver(), 0.0f, 0.0f, 1.0f, 1.0f);
+    View* view = new View(View::ViewWindow, renderer, sim->getActiveObserver(), 0.0f, 0.0f, 1.0f, 1.0f);
     views.push_back(view);
     activeView = views.begin();
 
@@ -4260,15 +3796,16 @@ bool CelestiaCore::initRenderer()
                              Renderer::ShowAtmospheres |
                              Renderer::ShowAutoMag);
 
+#ifdef USE_GLCONTEXT
     GLContext* context = new GLContext();
 
     context->init(config->ignoreGLExtensions);
     // Choose the render path, starting with the least desirable
     context->setRenderPath(GLContext::GLPath_GLSL);
-    //fmt::printf(_("render path: %i\n"), context->getRenderPath());
+    //DPRINTF(LOG_LEVEL_VERBOSE, "render path: %i\n", context->getRenderPath());
+#endif
 
     Renderer::DetailOptions detailOptions;
-    detailOptions.ringSystemSections = config->ringSystemSections;
     detailOptions.orbitPathSamplePoints = config->orbitPathSamplePoints;
     detailOptions.shadowTextureSize = config->shadowTextureSize;
     detailOptions.eclipseTextureSize = config->eclipseTextureSize;
@@ -4277,7 +3814,11 @@ bool CelestiaCore::initRenderer()
     detailOptions.linearFadeFraction = config->linearFadeFraction;
 
     // Prepare the scene for rendering.
+#ifdef USE_GLCONTEXT
     if (!renderer->init(context, (int) width, (int) height, detailOptions))
+#else
+    if (!renderer->init((int) width, (int) height, detailOptions))
+#endif
     {
         fatalError(_("Failed to initialize renderer"), false);
         return false;
@@ -4290,9 +3831,13 @@ bool CelestiaCore::initRenderer()
     }
 
     if (config->mainFont == "")
-        font = LoadTextureFont("fonts/default.txf");
+#if NO_TTF
+        font = LoadTextureFont(renderer, "fonts/default.txf");
+#else
+        font = LoadTextureFont(renderer, "fonts/FreeSans.ttf,12");
+#endif
     else
-        font = LoadTextureFont(string("fonts/") + config->mainFont);
+        font = LoadTextureFont(renderer, fs::path("fonts") / config->mainFont);
 
     if (font == nullptr)
         cout << _("Error loading font; text will not be visible.\n");
@@ -4300,23 +3845,23 @@ bool CelestiaCore::initRenderer()
         font->buildTexture();
 
     if (config->titleFont != "")
-        titleFont = LoadTextureFont(string("fonts") + "/" + config->titleFont);
+        titleFont = LoadTextureFont(renderer, fs::path("fonts") / config->titleFont);
     if (titleFont != nullptr)
         titleFont->buildTexture();
     else
         titleFont = font;
 
     // Set up the overlay
-    overlay = new Overlay();
+    overlay = new Overlay(*renderer);
     overlay->setWindowSize(width, height);
 
-    if (config->labelFont == "")
+    if (config->labelFont.empty())
     {
         renderer->setFont(Renderer::FontNormal, font);
     }
     else
     {
-        TextureFont* labelFont = LoadTextureFont(string("fonts") + "/" + config->labelFont);
+        TextureFont* labelFont = LoadTextureFont(renderer, fs::path("fonts") / config->labelFont);
         if (labelFont == nullptr)
         {
             renderer->setFont(Renderer::FontNormal, font);
@@ -4329,23 +3874,17 @@ bool CelestiaCore::initRenderer()
     }
 
     renderer->setFont(Renderer::FontLarge, titleFont);
-
-    if (config->logoTextureFile != "")
-    {
-        logoTexture = LoadTextureFromFile(string("textures") + "/" + config->logoTextureFile);
-    }
-
     return true;
 }
 
 
 static void loadCrossIndex(StarDatabase* starDB,
                            StarDatabase::Catalog catalog,
-                           const string& filename)
+                           const fs::path& filename)
 {
     if (!filename.empty())
     {
-        ifstream xrefFile(filename, ios::in | ios::binary);
+        ifstream xrefFile(filename.string(), ios::in | ios::binary);
         if (xrefFile.good())
         {
             if (!starDB->loadCrossIndex(catalog, xrefFile))
@@ -4362,18 +3901,17 @@ bool CelestiaCore::readStars(const CelestiaConfig& cfg,
 {
     StarDetails::SetStarTextures(cfg.starTextures);
 
-    ifstream starNamesFile(cfg.starNamesFile, ios::in);
-    if (!starNamesFile.good())
+    StarNameDatabase* starNameDB = nullptr;
+    ifstream starNamesFile(cfg.starNamesFile.string(), ios::in);
+    if (starNamesFile.good())
+    {
+        starNameDB = StarNameDatabase::readNames(starNamesFile);
+        if (starNameDB == nullptr)
+            cerr << _("Error reading star names file\n");
+    }
+    else
     {
         fmt::fprintf(cerr, _("Error opening %s\n"), cfg.starNamesFile);
-        return false;
-    }
-
-    StarNameDatabase* starNameDB = StarNameDatabase::readNames(starNamesFile);
-    if (starNameDB == nullptr)
-    {
-        cerr << _("Error reading star names file\n");
-        return false;
     }
 
     // First load the binary star database file.  The majority of stars
@@ -4382,9 +3920,9 @@ bool CelestiaCore::readStars(const CelestiaConfig& cfg,
     if (!cfg.starDatabaseFile.empty())
     {
         if (progressNotifier)
-            progressNotifier->update(cfg.starDatabaseFile);
+            progressNotifier->update(cfg.starDatabaseFile.string());
 
-        ifstream starFile(cfg.starDatabaseFile, ios::in | ios::binary);
+        ifstream starFile(cfg.starDatabaseFile.string(), ios::in | ios::binary);
         if (!starFile.good())
         {
             fmt::fprintf(cerr, _("Error opening %s\n"), cfg.starDatabaseFile);
@@ -4402,6 +3940,8 @@ bool CelestiaCore::readStars(const CelestiaConfig& cfg,
         }
     }
 
+    if (starNameDB == nullptr)
+        starNameDB = new StarNameDatabase();
     starDB->setNameDatabase(starNameDB);
 
     loadCrossIndex(starDB, StarDatabase::HenryDraper, cfg.HDCrossIndexFile);
@@ -4410,38 +3950,27 @@ bool CelestiaCore::readStars(const CelestiaConfig& cfg,
 
     // Next, read any ASCII star catalog files specified in the StarCatalogs
     // list.
-    if (!cfg.starCatalogFiles.empty())
+    for (const auto& file : config->starCatalogFiles)
     {
-        for (const auto& file : config->starCatalogFiles)
-        {
-            if (file != "")
-            {
-                ifstream starFile(file, ios::in);
-                if (starFile.good())
-                {
-                    starDB->load(starFile, "");
-                }
-                else
-                {
-                    fmt::fprintf(cerr, _("Error opening star catalog %s\n"), file);
-                }
-            }
-        }
+        if (file.empty())
+            continue;
+
+        ifstream starFile(file.string(), ios::in);
+        if (starFile.good())
+            starDB->load(starFile);
+        else
+            fmt::fprintf(cerr, _("Error opening star catalog %s\n"), file);
     }
 
     // Now, read supplemental star files from the extras directories
-    for (const auto& _dir : config->extrasDirs)
+    for (const auto& dir : config->extrasDirs)
     {
-        if (_dir != "")
-        {
-            Directory* dir = OpenDirectory(_dir);
+        if (!is_valid_directory(dir))
+            continue;
 
-            StarLoader loader(starDB, "star", Content_CelestiaStarCatalog, progressNotifier);
-            loader.pushDir(_dir);
-            dir->enumFiles(loader, true);
-
-            delete dir;
-        }
+        StarLoader loader(starDB, "star", Content_CelestiaStarCatalog, progressNotifier);
+        for (const auto& fn : fs::recursive_directory_iterator(dir))
+            loader.process(fn);
     }
 
     starDB->finish();
@@ -4501,6 +4030,16 @@ void CelestiaCore::setCursorHandler(CursorHandler* handler)
 CelestiaCore::CursorHandler* CelestiaCore::getCursorHandler() const
 {
     return cursorHandler;
+}
+
+void CelestiaCore::setContextMenuHandler(ContextMenuHandler* handler)
+{
+    contextMenuHandler = handler;
+}
+
+CelestiaCore::ContextMenuHandler* CelestiaCore::getContextMenuHandler() const
+{
+    return contextMenuHandler;
 }
 
 int CelestiaCore::getTimeZoneBias() const
@@ -4632,7 +4171,8 @@ void CelestiaCore::initMovieCapture(MovieCapture* mc)
 
 void CelestiaCore::recordBegin()
 {
-    if (movieCapture != nullptr) {
+    if (movieCapture != nullptr)
+    {
         recording = true;
         movieCapture->recordingStatus(true);
     }
@@ -4701,11 +4241,15 @@ void CelestiaCore::notifyWatchers(int property)
 }
 
 
-void CelestiaCore::goToUrl(const string& urlStr)
+bool CelestiaCore::goToUrl(const string& urlStr)
 {
     Url url(urlStr, this);
-    url.goTo();
-    notifyWatchers(RenderFlagsChanged | LabelFlagsChanged);
+    bool ret = url.goTo();
+    if (ret)
+        notifyWatchers(RenderFlagsChanged | LabelFlagsChanged);
+    else
+        fatalError(_("Invalid URL"));
+    return ret;
 }
 
 
@@ -4876,158 +4420,69 @@ bool CelestiaCore::referenceMarkEnabled(const string& refMark, Selection sel) co
 
 
 #ifdef CELX
-class LuaPathFinder : public EnumFilesHandler
-{
- public:
-    string luaPath;
-    LuaPathFinder(string s) : luaPath(s) {};
-    string lastPath;
-
-    bool process(const string& filename)
-    {
-        if (getPath() != lastPath)
-        {
-            int extPos = filename.rfind('.');
-            if (extPos != (int)string::npos)
-            {
-                string ext = string(filename, extPos, filename.length() - extPos + 1);
-                if (ext == ".lua")
-                {
-                    lastPath = getPath();
-                    string newPatt = getPath()+"/?.lua;";
-                    extPos = luaPath.rfind(newPatt);
-                    if (extPos < 0)
-                    {
-                        luaPath = luaPath + newPatt;
-                    }
-                }
-            }
-        }
-        return true;
-    };
-};
-
-
-// Initialize the Lua hook table as well as the Lua state for scripted
-// objects. The Lua hook operates in a different Lua state than user loaded
-// scripts. It always has file system access via the IO package. If the script
-// system access policy is "allow", then scripted objects will run in the same
-// Lua context as the Lua hook. Sharing state between scripted objects and the
-// hook can be very useful, but it gives system access to scripted objects,
-// and therefore must be restricted based on the system access policy.
 bool CelestiaCore::initLuaHook(ProgressNotifier* progressNotifier)
 {
-    luaHook = new LuaState();
-    luaHook->init(this);
-
-    string LuaPath = "?.lua;celxx/?.lua;";
-
-    // Find the path for lua files in the extras directories
-    {
-        for (const auto& _dir : config->extrasDirs)
-        {
-            if (_dir != "")
-            {
-                Directory* dir = OpenDirectory(_dir);
-
-                LuaPathFinder loader("");
-                loader.pushDir(_dir);
-                dir->enumFiles(loader, true);
-                LuaPath += loader.luaPath;
-                delete dir;
-            }
-        }
-    }
-
-    // Always grant access for the Lua hook
-    luaHook->allowSystemAccess();
-
-    luaHook->setLuaPath(LuaPath);
-
-    int status = 0;
-
-    // Execute the Lua hook initialization script
-    if (config->luaHook != "")
-    {
-        string filename = config->luaHook;
-        ifstream scriptfile(filename);
-        if (!scriptfile.good())
-        {
-            string errMsg;
-            errMsg = fmt::sprintf(_("Error opening LuaHook '%s'"),  filename);
-            fatalError(errMsg);
-        }
-
-        if (progressNotifier)
-            progressNotifier->update(config->luaHook);
-
-        status = luaHook->loadScript(scriptfile, filename);
-    }
-    else
-    {
-        status = luaHook->loadScript("");
-    }
-
-    if (status != 0)
-    {
-        cerr << "lua hook load failed\n";
-        string errMsg = luaHook->getErrorMessage();
-        if (errMsg.empty())
-            errMsg = _("Unknown error loading hook script");
-        fatalError(errMsg);
-        delete luaHook;
-        luaHook = nullptr;
-    }
-    else
-    {
-        // Coroutine execution; control may be transferred between the
-        // script and Celestia's event loop
-        if (!luaHook->createThread())
-        {
-            cerr << "hook thread failed\n";
-            string errMsg = _("Script coroutine initialization failed");
-            fatalError(errMsg);
-            delete luaHook;
-            luaHook = nullptr;
-        }
-
-        if (luaHook)
-        {
-            while (!luaHook->tick(0.1)) ;
-        }
-    }
-
-    // Set up the script context; if the system access policy is allow,
-    // it will share the same context as the Lua hook. Otherwise, we
-    // create a private context.
-    if (config->scriptSystemAccessPolicy == "allow")
-    {
-        if (luaHook)
-        {
-            SetScriptedObjectContext(luaHook->getState());
-        }
-    }
-    else
-    {
-        luaSandbox = new LuaState();
-        luaSandbox->init(this);
-
-        // Allow access to functions in package because we need 'require'
-        // But, loadlib is prohibited.
-        luaSandbox->allowLuaPackageAccess();
-        luaSandbox->setLuaPath(LuaPath);
-
-        status = luaSandbox->loadScript("");
-        if (status != 0)
-        {
-            delete luaSandbox;
-            luaSandbox = nullptr;
-            return false;
-        }
-
-        SetScriptedObjectContext(luaSandbox->getState());
-    }
-
-    return true;
+    return CreateLuaEnvironment(this, config, progressNotifier);
 }
 #endif
+
+void CelestiaCore::setTypedText(const char *c_p)
+{
+    typedText += string(c_p);
+    typedTextCompletion = sim->getObjectCompletion(typedText, (renderer->getLabelMode() & Renderer::LocationLabels) != 0);
+    typedTextCompletionIdx = -1;
+#ifdef AUTO_COMPLETION
+    if (typedTextCompletion.size() == 1)
+    {
+        string::size_type pos = typedText.rfind('/', typedText.length());
+        if (pos != string::npos)
+            typedText = typedText.substr(0, pos + 1) + typedTextCompletion[0];
+        else
+            typedText = typedTextCompletion[0];
+    }
+#endif
+}
+
+vector<Observer*> CelestiaCore::getObservers() const
+{
+    vector<Observer*> observerList;
+    for (const auto view : views)
+        if (view->type == View::ViewWindow)
+            observerList.push_back(view->observer);
+    return observerList;
+}
+
+View* CelestiaCore::getViewByObserver(const Observer *obs) const
+{
+    for (const auto view : views)
+         if (view->observer == obs)
+             return view;
+    return nullptr;
+}
+
+bool CelestiaCore::saveScreenShot(const fs::path& filename, ContentType type) const
+{
+    if (type == Content_Unknown)
+        type = DetermineFileType(filename);
+
+    // Get the dimensions of the current viewport
+    array<int, 4> viewport;
+    getRenderer()->getViewport(viewport);
+
+    if (type == Content_JPEG)
+    {
+        return CaptureGLBufferToJPEG(filename,
+                                     viewport[0], viewport[1],
+                                     viewport[2], viewport[3],
+                                     getRenderer());
+    }
+    if (type == Content_PNG)
+    {
+        return CaptureGLBufferToPNG(filename,
+                                    viewport[0], viewport[1],
+                                    viewport[2], viewport[3],
+                                    getRenderer());
+    }
+
+    return false;
+}

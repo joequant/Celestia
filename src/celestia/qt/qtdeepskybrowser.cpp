@@ -11,6 +11,7 @@
 // of the License, or (at your option) any later version.
 
 #include <celestia/celestiacore.h>
+#include <celutil/gettext.h>
 #include "qtdeepskybrowser.h"
 #include "qtcolorswatchwidget.h"
 #include "qtinfopanel.h"
@@ -28,6 +29,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QRegExp>
+#include <QCollator>
 #include <vector>
 #include <set>
 
@@ -69,6 +71,7 @@ private:
     Criterion criterion;
     Vector3d pos;
     const Universe *universe;
+    QCollator coll;
 };
 
 
@@ -226,6 +229,7 @@ DSOPredicate::DSOPredicate(Criterion _criterion,
     pos(_observerPos),
     universe(_universe)
 {
+    coll.setNumericMode(true);
 }
 
 
@@ -252,7 +256,8 @@ bool DSOPredicate::operator()(const DeepSkyObject* dso0, const DeepSkyObject* ds
         return strcmp(dso0->getType(), dso1->getType()) < 0;
 
     case Alphabetical:
-        return universe->getDSOCatalog()->getDSOName(dso0, true) > universe->getDSOCatalog()->getDSOName(dso1, true);
+        return coll.compare(universe->getDSOCatalog()->getDSOName(dso0, true).c_str(),
+                            universe->getDSOCatalog()->getDSOName(dso1, true).c_str()) < 0;
 
     default:
         return false;
@@ -431,26 +436,29 @@ DeepSkyBrowser::DeepSkyBrowser(CelestiaCore* _appCore, QWidget* parent, InfoPane
     QGridLayout* dsoGroupLayout = new QGridLayout();
 
     // Buttons to select filtering criterion for dsos
-    globularsButton = new QRadioButton(_("Globulars"));
+    globularsButton = new QCheckBox(_("Globulars"));
     connect(globularsButton, SIGNAL(clicked()), this, SLOT(slotRefreshTable()));
     dsoGroupLayout->addWidget(globularsButton, 0, 0);
 
-    galaxiesButton = new QRadioButton(_("Galaxies"));
+    galaxiesButton = new QCheckBox(_("Galaxies"));
     connect(galaxiesButton, SIGNAL(clicked()), this, SLOT(slotRefreshTable()));
     dsoGroupLayout->addWidget(galaxiesButton, 0, 1);
 
-    nebulaeButton = new QRadioButton(_("Nebulae"));
+    nebulaeButton = new QCheckBox(_("Nebulae"));
     connect(nebulaeButton, SIGNAL(clicked()), this, SLOT(slotRefreshTable()));
     dsoGroupLayout->addWidget(nebulaeButton, 1, 0);
 
-    openClustersButton = new QRadioButton(_("Open Clusters"));
+    openClustersButton = new QCheckBox(_("Open Clusters"));
     connect(openClustersButton, SIGNAL(clicked()), this, SLOT(slotRefreshTable()));
     dsoGroupLayout->addWidget(openClustersButton, 1, 1);
 
     dsoGroup->setLayout(dsoGroupLayout);
     layout->addWidget(dsoGroup);
 
+    globularsButton->setChecked(true);
     galaxiesButton->setChecked(true);
+    nebulaeButton->setChecked(true);
+    openClustersButton->setChecked(true);
 
     // Additional filtering controls
     QGroupBox* filterGroup = new QGroupBox(_("Filter"));

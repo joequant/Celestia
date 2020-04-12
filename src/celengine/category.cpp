@@ -1,14 +1,16 @@
 #include <iostream>
-#include <celutil/util.h>
+#include <celutil/gettext.h>
 #include <celutil/debug.h>
-#include <celengine/catentry.h>
+#include <celengine/astroobj.h>
 #include "category.h"
 
 UserCategory::UserCategory(const std::string &n, UserCategory *p, const std::string &domain) :
         m_name(n), 
         m_parent(p)
 {
+#ifdef ENABLE_NLS
     m_i18n = dgettext(m_name.c_str(), domain.c_str());
+#endif
 }
 
 UserCategory::~UserCategory() { cleanup(); }
@@ -30,10 +32,10 @@ bool UserCategory::addObject(Selection s)
 {
     if (s.empty())
         return false;
-    Selection s_ = s.catEntry()->toSelection();
+    Selection s_ = s.object()->toSelection();
     if (!_addObject(s_))
         return false;
-    return s_.catEntry()->_addToCategory(this);
+    return s_.object()->_addToCategory(this);
 }
 
 bool UserCategory::removeObject(Selection s)
@@ -42,7 +44,7 @@ bool UserCategory::removeObject(Selection s)
         return false;
     if (!_removeObject(s))
         return false;
-    return s.catEntry()->_removeFromCategory(this);
+    return s.object()->_removeFromCategory(this);
 }
 
 bool UserCategory::_removeObject(Selection s)
@@ -93,19 +95,19 @@ bool UserCategory::hasChild(const std::string &n) const
 
 void UserCategory::cleanup()
 {
-    DPRINTF(1, "UserCategory::cleanup()\n");
-    DPRINTF(1, "  Objects: %i\n", m_objlist.size());
-    DPRINTF(1, "  Categories: %i\n", m_catlist.size());
+    DPRINTF(LOG_LEVEL_INFO, "UserCategory::cleanup()\n");
+    DPRINTF(LOG_LEVEL_INFO, "  Objects: %i\n", m_objlist.size());
+    DPRINTF(LOG_LEVEL_INFO, "  Categories: %i\n", m_catlist.size());
     while(!m_objlist.empty())
     {
         auto it = m_objlist.begin();
-        DPRINTF(1, "Removing object: %s\n", it->getName());
+        DPRINTF(LOG_LEVEL_INFO, "Removing object: %s\n", it->getName());
         removeObject(*it);
     }
     while(!m_catlist.empty())
     {
         auto it = m_catlist.begin();
-        DPRINTF(1, "Removing category: %s\n", (*it)->name());
+        DPRINTF(LOG_LEVEL_INFO, "Removing category: %s\n", (*it)->name());
         deleteChild(*it);
     }
 }
@@ -135,7 +137,7 @@ UserCategory *UserCategory::find(const std::string &s)
 {
     if (m_allcats.count(s) == 0)
         return nullptr;
-    DPRINTF(1, "UserCategory::find(%s): exists\n", s.c_str());
+    DPRINTF(LOG_LEVEL_INFO, "UserCategory::find(%s): exists\n", s.c_str());
     return m_allcats.find(s)->second;
 }
 

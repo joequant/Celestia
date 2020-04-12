@@ -9,6 +9,7 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
+#include <config.h>
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -26,21 +27,20 @@
 #include <commdlg.h>
 #include <shellapi.h>
 
+#include <celengine/glsupport.h>
+
 #include <celmath/mathlib.h>
 #include <celutil/debug.h>
-#include <celutil/util.h>
+#include <celutil/gettext.h>
 #include <celutil/winutil.h>
 #include <celutil/filetype.h>
-#include <celengine/celestia.h>
 #include <celengine/astro.h>
-#include <celengine/cmdparser.h>
-#include <celengine/axisarrow.h>
-#include <celengine/planetgrid.h>
+#include <celscript/legacy/cmdparser.h>
 
-#include <GL/glew.h>
 #include "celestia/celestiacore.h"
-#include "celestia/imagecapture.h"
 #include "celestia/avicapture.h"
+#include "celestia/helper.h"
+#include "celestia/scriptmenu.h"
 #include "celestia/url.h"
 #include "winstarbrowser.h"
 #include "winssbrowser.h"
@@ -54,13 +54,14 @@
 #include "wintime.h"
 #include "winsplash.h"
 #include "odmenu.h"
-#include "celestia/scriptmenu.h"
 
 #include "res/resource.h"
 #include "wglext.h"
 
 #include <locale.h>
+#include <fmt/printf.h>
 
+using namespace celestia;
 using namespace std;
 
 typedef pair<int,string> IntStrPair;
@@ -88,7 +89,7 @@ static HDC deviceContext;
 
 static bool bReady = false;
 
-static LPTSTR CelestiaRegKey = "Software\\Shatters.net\\Celestia";
+static LPTSTR CelestiaRegKey = "Software\\celestia.space\\Celestia1.7-dev";
 
 HINSTANCE appInstance;
 HMODULE hRes;
@@ -186,7 +187,9 @@ struct AppPreferences
     string altSurfaceName;
     uint32_t textureResolution;
     Renderer::StarStyle starStyle;
+#ifdef USE_GLCONTEXT
     GLContext::GLRenderPath renderPath;
+#endif
     bool renderPathSet;
 };
 
@@ -407,35 +410,22 @@ static void ShowUniversalTime(CelestiaCore* appCore)
 
 static void ShowLocalTime(CelestiaCore* appCore)
 {
-    TIME_ZONE_INFORMATION tzi;
-    DWORD dst = GetTimeZoneInformation(&tzi);
-    if (dst != TIME_ZONE_ID_INVALID)
+    string tzName;
+    int dstBias;
+    if (GetTZInfo(tzName, dstBias))
     {
-        LONG dstBias = 0;
-        WCHAR* tzName = NULL;
-
-        if (dst == TIME_ZONE_ID_STANDARD)
-        {
-            dstBias = tzi.StandardBias;
-            tzName = tzi.StandardName;
-        }
-        else if (dst == TIME_ZONE_ID_DAYLIGHT)
-        {
-            dstBias = tzi.DaylightBias;
-            tzName = tzi.DaylightName;
-        }
-
-        appCore->setTimeZoneName("   ");
-        appCore->setTimeZoneBias((tzi.Bias + dstBias) * -60);
+        appCore->setTimeZoneName(tzName);
+        appCore->setTimeZoneBias(dstBias);
     }
 }
 
 
-static bool BeginMovieCapture(const std::string& filename,
+static bool BeginMovieCapture(const Renderer* renderer,
+                              const std::string& filename,
                               int width, int height,
                               float framerate)
 {
-    MovieCapture* movieCapture = new AVICapture();
+    MovieCapture* movieCapture = new AVICapture(renderer);
 
     bool success = movieCapture->start(filename, width, height, framerate);
     if (success)
@@ -497,10 +487,10 @@ static bool ToggleMenuItem(HMENU menu, int id)
 
 bool LoadItemTextFromFile(HWND hWnd,
                           int item,
-                          char* filename)
+                          const fs::path& filename)
 {
     // ifstream textFile(filename, ios::in | ios::binary);
-    ifstream textFile(filename, ios::in);
+    ifstream textFile(filename.string(), ios::in);
     string s;
 
     if (!textFile.good())
@@ -583,7 +573,7 @@ BOOL APIENTRY ControlsHelpProc(HWND hDlg,
     switch (message)
     {
     case WM_INITDIALOG:
-        LoadItemTextFromFile(hDlg, IDC_TEXT_CONTROLSHELP, const_cast<char*>(LocaleFilename("controls.txt").c_str()));
+        LoadItemTextFromFile(hDlg, IDC_TEXT_CONTROLSHELP, LocaleFilename("controls.txt"));
         return(TRUE);
 
     case WM_COMMAND:
@@ -607,7 +597,7 @@ BOOL APIENTRY LicenseProc(HWND hDlg,
     switch (message)
     {
     case WM_INITDIALOG:
-        LoadItemTextFromFile(hDlg, IDC_LICENSE_TEXT, const_cast<char*>(LocaleFilename("COPYING").c_str()));
+        LoadItemTextFromFile(hDlg, IDC_LICENSE_TEXT, LocaleFilename("COPYING"));
         return(TRUE);
 
     case WM_COMMAND:
@@ -632,86 +622,8 @@ BOOL APIENTRY GLInfoProc(HWND hDlg,
     {
     case WM_INITDIALOG:
         {
-            const char* vendor = (char*) glGetString(GL_VENDOR);
-            const char* render = (char*) glGetString(GL_RENDERER);
-            const char* version = (char*) glGetString(GL_VERSION);
-            const char* ext = (char*) glGetString(GL_EXTENSIONS);
-            string s;
-            s += UTF8ToCurrentCP(_("Vendor: "));
-            if (vendor != NULL)
-                s += vendor;
-            s += "\r\r\n";
-
-            s += UTF8ToCurrentCP(_("Renderer: "));
-            if (render != NULL)
-                s += render;
-            s += "\r\r\n";
-
-            s += UTF8ToCurrentCP(_("Version: "));
-            if (version != NULL)
-                s += version;
-            s += "\r\r\n";
-
-            if (GLEW_ARB_shading_language_100)
-            {
-                const char* versionString = (const char*) glGetString(GL_SHADING_LANGUAGE_VERSION_ARB);
-                if (versionString != NULL)
-                {
-                    s += UTF8ToCurrentCP(_("GLSL version: "));
-                    s += versionString;
-                    s += "\r\r\n";
-                }
-            }
-
-            char buf[1024];
-            GLint simTextures = 1;
-            if (GLEW_ARB_multitexture)
-                glGetIntegerv(GL_MAX_TEXTURE_UNITS_ARB, &simTextures);
-            sprintf(buf, "%s%d\r\r\n",
-                    UTF8ToCurrentCP(_("Max simultaneous textures: ")).c_str(),
-                    simTextures);
-            s += buf;
-
-            GLint maxTextureSize = 0;
-            glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
-            sprintf(buf, "%s%d\r\r\n",
-                    UTF8ToCurrentCP(_("Max texture size: ")).c_str(),
-                    maxTextureSize);
-            s += buf;
-
-            if (GLEW_EXT_texture_cube_map)
-            {
-                GLint maxCubeMapSize = 0;
-                glGetIntegerv(GL_MAX_CUBE_MAP_TEXTURE_SIZE_ARB, &maxCubeMapSize);
-                sprintf(buf, "%s%d\r\r\n",
-                        UTF8ToCurrentCP(_("Max cube map size: ")).c_str(),
-                        maxTextureSize);
-                s += buf;
-            }
-
-            GLfloat pointSizeRange[2];
-            glGetFloatv(GL_POINT_SIZE_RANGE, pointSizeRange);
-            sprintf(buf, "%s%f - %f\r\r\n",
-                    UTF8ToCurrentCP(_("Point size range: ")).c_str(),
-                    pointSizeRange[0], pointSizeRange[1]);
-            s += buf;
-
-            s += "\r\r\n";
-            s += UTF8ToCurrentCP(_("Supported Extensions:")).c_str();
-            s += "\r\r\n";
-
-            if (ext != NULL)
-            {
-                string extString(ext);
-                int pos = extString.find(' ', 0);
-                while (pos != string::npos)
-                {
-                    extString.replace(pos, 1, "\r\r\n");
-                    pos = extString.find(' ', pos);
-                }
-                s += extString;
-            }
-
+            string s = Helper::getRenderInfo(appCore->getRenderer());
+            s = UTF8ToCurrentCP(s);
             SetDlgItemText(hDlg, IDC_GLINFO_TEXT, s.c_str());
         }
         return(TRUE);
@@ -1396,10 +1308,14 @@ BOOL APIENTRY SelectDisplayModeProc(HWND hDlg,
             HWND hwnd = GetDlgItem(hDlg, IDC_COMBO_RESOLUTION);
 
             // Add windowed mode as the first item on the menu
+#ifdef ENABLE_NLS
             bind_textdomain_codeset("celestia", CurrentCP());
+#endif
             SendMessage(hwnd, CB_INSERTSTRING, -1,
                         reinterpret_cast<LPARAM>(_("Windowed Mode")));
+#ifdef ENABLE_NLS
             bind_textdomain_codeset("celestia", "UTF8");
+#endif
 
             for (vector<DEVMODE>::const_iterator iter= displayModes->begin();
                  iter != displayModes->end(); iter++)
@@ -1672,7 +1588,7 @@ VOID APIENTRY handlePopupMenu(HWND hwnd,
             AppendMenu(hMenu, MF_STRING, ID_INFO, UTF8ToCurrentCP(_("&Info")).c_str());
 
             SolarSystemCatalog* solarSystemCatalog = sim->getUniverse()->getSolarSystemCatalog();
-            SolarSystemCatalog::iterator iter = solarSystemCatalog->find(sel.star()->getCatalogNumber());
+            SolarSystemCatalog::iterator iter = solarSystemCatalog->find(sel.star()->getIndex());
             if (iter != solarSystemCatalog->end())
             {
                 SolarSystem* solarSys = iter->second;
@@ -1757,7 +1673,7 @@ void ShowWWWInfo(const Selection& sel)
             if (url.empty())
             {
                 char name[32];
-                sprintf(name, "HIP%d", sel.star()->getCatalogNumber() & ~0xf0000000);
+                sprintf(name, "HIP%d", sel.star()->getIndex() & ~Star::MaxTychoCatalogNumber);
                 url = string("http://simbad.u-strasbg.fr/sim-id.pl?protocol=html&Ident=") + name;
             }
         }
@@ -1780,12 +1696,6 @@ void ShowWWWInfo(const Selection& sel)
                  NULL,
                  NULL,
                  0);
-}
-
-
-void ContextMenu(float x, float y, Selection sel)
-{
-    handlePopupMenu(mainWindow, x, y, sel);
 }
 
 
@@ -1873,7 +1783,7 @@ bool SetDCPixelFormat(HDC hDC)
             PFD_SUPPORT_OPENGL |    // Support OpenGL calls in window
             PFD_DOUBLEBUFFER,        // Double buffered mode
             PFD_TYPE_RGBA,        // RGBA Color mode
-            GetDeviceCaps(hDC, BITSPIXEL),// Want the display bit depth
+            (BYTE)GetDeviceCaps(hDC, BITSPIXEL),// Want the display bit depth
             0,0,0,0,0,0,          // Not used to select mode
             0,0,            // Not used to select mode
             0,0,0,0,0,            // Not used to select mode
@@ -2037,10 +1947,11 @@ HWND CreateOpenGLWindow(int x, int y, int width, int height,
 
     if (firstContext)
     {
-        GLenum glewErr = glewInit();
-        if (glewErr != GLEW_OK)
+        if (!gl::init() || !gl::checkVersion(gl::GL_2_1))
         {
-            MessageBox(NULL, "Could not set up OpenGL extensions.", "Fatal Error",
+            MessageBox(NULL,
+                       _("You system doesn't support OpenGL 2.1!"),
+                       "Fatal Error",
                        MB_OK | MB_ICONERROR);
             return NULL;
         }
@@ -2220,7 +2131,7 @@ void handleKey(WPARAM key, bool down)
 }
 
 
-static void BuildScriptsMenu(HMENU menuBar, const string& scriptsDir)
+static void BuildScriptsMenu(HMENU menuBar, const fs::path& scriptsDir)
 {
     HMENU fileMenu = GetSubMenu(menuBar, 0);
 
@@ -2235,7 +2146,7 @@ static void BuildScriptsMenu(HMENU menuBar, const string& scriptsDir)
     }
 
     MENUITEMINFO info;
-    memset(&info, sizeof(info), 0);
+    memset(&info, 0, sizeof(info));
     info.cbSize = sizeof(info);
     info.fMask = MIIM_SUBMENU;
 
@@ -2246,8 +2157,7 @@ static void BuildScriptsMenu(HMENU menuBar, const string& scriptsDir)
         HMENU scriptMenu = info.hSubMenu;
 
         // Remove the old menu items
-        int count = GetMenuItemCount(scriptMenu);
-        while (count-- > 0)
+        for (int count = GetMenuItemCount(scriptMenu); count > 0; count--)
             DeleteMenu(scriptMenu, 0, MF_BYPOSITION);
 
         for (unsigned int i = 0; i < ScriptMenuItems->size(); i++)
@@ -2347,6 +2257,15 @@ public:
     }
 };
 
+class WinContextMenuHandler : public CelestiaCore::ContextMenuHandler
+{
+public:
+    void requestContextMenu(float x, float y, Selection sel)
+    {
+        handlePopupMenu(mainWindow, x, y, sel);
+    }
+};
+
 
 static bool InitJoystick(JOYCAPS& caps)
 {
@@ -2439,7 +2358,7 @@ static bool SetRegistryInt64(HKEY key, LPCTSTR value, uint64_t intVal)
     LONG err = RegSetValueEx(key,
                              value,
                              0,
-                             REG_DWORD,
+                             REG_QWORD,
                              reinterpret_cast<CONST BYTE*>(&intVal),
                              sizeof(intVal));
     return err == ERROR_SUCCESS;
@@ -2528,8 +2447,10 @@ static bool LoadPreferencesFromRegistry(LPTSTR regkey, AppPreferences& prefs)
     GetRegistryValue(key, "StarsColor", &prefs.starsColor, sizeof(prefs.starsColor));
     prefs.starStyle = Renderer::FuzzyPointStars;
     GetRegistryValue(key, "StarStyle", &prefs.starStyle, sizeof(prefs.starStyle));
+#ifdef USE_GLCONTEXT
     prefs.renderPath = GLContext::GLPath_GLSL;
     prefs.renderPathSet = GetRegistryValue(key, "RenderPath", &prefs.renderPath, sizeof(prefs.renderPath));
+#endif
 
     GetRegistryValue(key, "LastVersion", &prefs.lastVersion, sizeof(prefs.lastVersion));
     GetRegistryValue(key, "TextureResolution", &prefs.textureResolution, sizeof(prefs.textureResolution));
@@ -2587,7 +2508,9 @@ static bool SavePreferencesToRegistry(LPTSTR regkey, AppPreferences& prefs)
     SetRegistryInt(key, "LastVersion", prefs.lastVersion);
     SetRegistryInt(key, "StarStyle", prefs.starStyle);
     SetRegistryInt(key, "StarsColor", prefs.starsColor);
+#ifdef USE_GLCONTEXT
     SetRegistryInt(key, "RenderPath", prefs.renderPath);
+#endif
     SetRegistry(key, "AltSurface", prefs.altSurfaceName);
     SetRegistryInt(key, "TextureResolution", prefs.textureResolution);
 
@@ -2629,7 +2552,9 @@ static bool GetCurrentPreferences(AppPreferences& prefs)
         prefs.starsColor = ColorTable_Enhanced;
     if (current == GetStarColorTable(ColorTable_Blackbody_D65))
         prefs.starsColor = ColorTable_Blackbody_D65;
+#ifdef USE_GLCONTEXT
     prefs.renderPath = appCore->getRenderer()->getGLContext()->getRenderPath();
+#endif
     prefs.textureResolution = appCore->getRenderer()->getResolution();
 
     return true;
@@ -2670,79 +2595,38 @@ static void HandleCaptureImage(HWND hWnd)
         // If you got here, a path and file has been specified.
         // Ofn.lpstrFile contains full path to specified file
         // Ofn.lpstrFileTitle contains just the filename with extension
-
-        // Get the dimensions of the current viewport
-        int viewport[4];
-        glGetIntegerv(GL_VIEWPORT, viewport);
-
-        bool success = false;
-
-        DWORD nFileType=0;
         char defaultExtensions[][4] = {"jpg", "png"};
         if (Ofn.nFileExtension == 0)
         {
             // If no extension was specified, use the selection of filter to
             // determine which type of file should be created, instead of
             // just defaulting to JPEG.
-            nFileType = Ofn.nFilterIndex;
             strcat(Ofn.lpstrFile, ".");
-            strcat(Ofn.lpstrFile, defaultExtensions[nFileType-1]);
+            strcat(Ofn.lpstrFile, defaultExtensions[Ofn.nFilterIndex-1]);
         }
         else if (*(Ofn.lpstrFile + Ofn.nFileExtension) == '\0')
         {
             // If just a period was specified for the extension, use the
             // selection of filter to determine which type of file should be
             // created instead of just defaulting to JPEG.
-            nFileType = Ofn.nFilterIndex;
-            strcat(Ofn.lpstrFile, defaultExtensions[nFileType-1]);
+            strcat(Ofn.lpstrFile, defaultExtensions[Ofn.nFilterIndex-1]);
         }
-        else
+
+        ContentType type = DetermineFileType(Ofn.lpstrFile);
+        if (type != Content_JPEG && type != Content_PNG)
         {
-            switch (DetermineFileType(Ofn.lpstrFile))
-            {
-            case Content_JPEG:
-                nFileType = 1;
-                break;
-            case Content_PNG:
-                nFileType = 2;
-                break;
-            default:
-                nFileType = 0;
-                break;
-            }
+            MessageBox(hWnd,
+                       _("Please use a name ending in '.jpg' or '.png'."),
+                       "Error",
+                       MB_OK | MB_ICONERROR);
+            return;
         }
 
         // Redraw to make sure that the back buffer is up to date
         appCore->draw();
-
-        if (nFileType == 1)
+        if (!appCore->saveScreenShot(Ofn.lpstrFile))
         {
-            success = CaptureGLBufferToJPEG(string(Ofn.lpstrFile),
-                                            viewport[0], viewport[1],
-                                            viewport[2], viewport[3]);
-        }
-        else if (nFileType == 2)
-        {
-            success = CaptureGLBufferToPNG(string(Ofn.lpstrFile),
-                                           viewport[0], viewport[1],
-                                           viewport[2], viewport[3]);
-        }
-        else
-        {
-            // Invalid file extension specified.
-            DPRINTF(0, "WTF? Unknown file extension specified for screen capture.\n");
-        }
-
-        if (!success)
-        {
-            char errorMsg[64];
-
-            if(nFileType == 0)
-                sprintf(errorMsg, "Specified file extension is not recognized.");
-            else
-                sprintf(errorMsg, "Could not save image file.");
-
-            MessageBox(hWnd, errorMsg, "Error", MB_OK | MB_ICONERROR);
+            MessageBox(hWnd, "Could not save image file.", "Error", MB_OK | MB_ICONERROR);
         }
     }
 }
@@ -2838,7 +2722,8 @@ static void HandleCaptureMovie(HWND hWnd)
         }
         else
         {
-            success = BeginMovieCapture(string(Ofn.lpstrFile),
+            success = BeginMovieCapture(appCore->getRenderer(),
+                                        string(Ofn.lpstrFile),
                                         MovieSizes[movieSize][0],
                                         MovieSizes[movieSize][1],
                                         MovieFramerates[movieFramerate]);
@@ -2895,40 +2780,7 @@ static void HandleOpenScript(HWND hWnd, CelestiaCore* appCore)
         // If you got here, a path and file has been specified.
         // Ofn.lpstrFile contains full path to specified file
         // Ofn.lpstrFileTitle contains just the filename with extension
-        ContentType type = DetermineFileType(Ofn.lpstrFile);
-
-        if (type == Content_CelestiaScript)
-        {
-            appCore->runScript(Ofn.lpstrFile);
-        }
-        else if (type == Content_CelestiaLegacyScript)
-        {
-            ifstream scriptfile(Ofn.lpstrFile);
-            if (!scriptfile.good())
-            {
-                MessageBox(hWnd, "Error opening script file.", "Error",
-                           MB_OK | MB_ICONERROR);
-            }
-            else
-            {
-                CommandParser parser(scriptfile);
-                CommandSequence* script = parser.parse();
-                if (script == NULL)
-                {
-                    const vector<string>* errors = parser.getErrors();
-                    const char* errorMsg = "";
-                    if (errors->size() > 0)
-                        errorMsg = (*errors)[0].c_str();
-                    MessageBox(hWnd, errorMsg, "Error in script file.",
-                               MB_OK | MB_ICONERROR);
-                }
-                else
-                {
-                    appCore->cancelScript(); // cancel any running script
-                    appCore->runScript(script);
-                }
-            }
-        }
+        appCore->runScript(Ofn.lpstrFile);
     }
 
     if (strlen(currentDir) != 0)
@@ -3014,7 +2866,7 @@ static char* skipSpace(char* s)
 
 static char* skipUntilQuote(char* s)
 {
-    while (*s != '"' && s != '\0')
+    while (*s != '"' && *s != '\0')
         s++;
     return s;
 }
@@ -3087,7 +2939,7 @@ static bool runOnce = false;
 static string startURL;
 static string startDirectory;
 static string startScript;
-static vector<string> extrasDirectories;
+static vector<fs::path> extrasDirectories;
 static string configFileName;
 static bool useAlternateConfigFile = false;
 static bool skipSplashScreen = false;
@@ -3248,7 +3100,7 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     if (startDirectory != "")
         SetCurrentDirectory(startDirectory.c_str());
 
-    s_splash = new SplashWindow("splash.png");
+    s_splash = new SplashWindow(SPLASH_DIR "\\" "splash.png");
     s_splash->setMessage("Loading data files...");
     if (!skipSplashScreen)
         s_splash->showSplash();
@@ -3353,6 +3205,7 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     // Gettext integration
     setlocale(LC_ALL, "");
     setlocale(LC_NUMERIC, "C");
+#ifdef ENABLE_NLS
     bindtextdomain("celestia","locale");
     bind_textdomain_codeset("celestia", "UTF-8");
     bindtextdomain("celestia_constellations","locale");
@@ -3369,6 +3222,7 @@ int APIENTRY WinMain(HINSTANCE hInstance,
         cout << "Couldn't load localized resources: "<< res<< "\n";
         hRes = hInstance;
     }
+#endif
 
     appCore->setAlerter(new WinAlerter());
 
@@ -3392,8 +3246,6 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     if (!initSucceeded)
         return 1;
 
-    appCore->getRenderer()->setSolarSystemMaxDistance(appCore->getConfig()->SolarSystemMaxDistance);
-
     if (startURL != "")
         appCore->setStartURL(startURL);
 
@@ -3409,6 +3261,9 @@ int APIENTRY WinMain(HINSTANCE hInstance,
             hDefaultCursor = LoadCursor(hRes, MAKEINTRESOURCE(IDC_CROSSHAIR));
         else
             hDefaultCursor = LoadCursor(hRes, MAKEINTRESOURCE(IDC_CROSSHAIR_OPAQUE));
+
+        appCore->getRenderer()->setSolarSystemMaxDistance(appCore->getConfig()->SolarSystemMaxDistance);
+        appCore->getRenderer()->setShadowMapSize(appCore->getConfig()->ShadowMapSize);
     }
 
     cursorHandler = new WinCursorHandler(hDefaultCursor);
@@ -3494,12 +3349,14 @@ int APIENTRY WinMain(HINSTANCE hInstance,
         appCore->setDateFormat((astro::Date::Format) prefs.dateFormat);
         appCore->getSimulation()->getActiveObserver()->setDisplayedSurface(prefs.altSurfaceName);
         appCore->getRenderer()->setResolution(prefs.textureResolution);
+#ifdef USE_GLCONTEXT
         if (prefs.renderPathSet)
         {
             GLContext* glContext = appCore->getRenderer()->getGLContext();
             if (glContext->renderPathSupported(prefs.renderPath))
                 glContext->setRenderPath(prefs.renderPath);
         }
+#endif
     }
     else
     {
@@ -3511,26 +3368,11 @@ int APIENTRY WinMain(HINSTANCE hInstance,
     BuildScriptsMenu(menuBar, ScriptsDirectory);
     syncMenusWithRendererState();
 
-    appCore->setContextMenuCallback(ContextMenu);
+    appCore->setContextMenuHandler(new WinContextMenuHandler());
 
     bReady = true;
 
-    // Get the current time
-    time_t systime = time(NULL);
-    struct tm *gmt = gmtime(&systime);
-    double timeTDB = astro::J2000;
-    if (gmt != NULL)
-    {
-        astro::Date d;
-        d.year = gmt->tm_year + 1900;
-        d.month = gmt->tm_mon + 1;
-        d.day = gmt->tm_mday;
-        d.hour = gmt->tm_hour;
-        d.minute = gmt->tm_min;
-        d.seconds = (int) gmt->tm_sec;
-        timeTDB = astro::UTCtoTDB(d);
-    }
-    appCore->start(timeTDB);
+    appCore->start();
 
     if (startURL != "")
     {
@@ -3994,43 +3836,9 @@ LRESULT CALLBACK MainWindowProc(HWND hWnd,
                         appCore->flash(_("Loading URL"));
                         appCore->goToUrl(urlString);
                     }
-                    else if (DetermineFileType(urlString) == Content_CelestiaScript)
-                    {
-                        appCore->runScript(urlString);
-                    }
                     else
                     {
-                        ifstream scriptfile(urlString.c_str());
-                        if (!scriptfile.good())
-                        {
-                            appCore->flash(_("Error opening script"));
-                        }
-                        else
-                        {
-                            // TODO: Need to fix memory leak with scripts;
-                            // a refcount is probably required.
-                            CommandParser parser(scriptfile);
-                            CommandSequence* script = parser.parse();
-                            if (script == NULL)
-                            {
-                                const vector<string>* errors = parser.getErrors();
-                                const char* errorMsg = "";
-                                if (errors->size() > 0)
-                                {
-                                    errorMsg = (*errors)[0].c_str();
-                                    appCore->flash(errorMsg);
-                                }
-                                else
-                                {
-                                    appCore->flash(_("Error loading script"));
-                                }
-                            }
-                            else
-                            {
-                                appCore->flash(_("Running script"));
-                                appCore->runScript(script);
-                            }
-                        }
+                        appCore->runScript(urlString);
                     }
                 }
             }

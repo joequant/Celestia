@@ -10,10 +10,10 @@
 #ifndef _CELMATH_RAY_H_
 #define _CELMATH_RAY_H_
 
-#ifdef __CELVEC__
-#include "vecmath.h"
-#endif
 #include <Eigen/Core>
+
+namespace celmath
+{
 
 template<class T> class Ray3
 {
@@ -22,16 +22,21 @@ template<class T> class Ray3
 
     Ray3();
     Ray3(const Eigen::Matrix<T, 3, 1>& origin, const Eigen::Matrix<T, 3, 1>& direction);
-#ifdef __CELVEC__
-    // Compatibility
-    Ray3(const Point3<T>&, const Vector3<T>&);
-#endif
 
     Eigen::Matrix<T, 3, 1> point(T) const;
 
     Ray3<T> transform(const Eigen::Matrix<T, 3, 3>& m) const
     {
         return Ray3<T>(m * origin, m * direction);
+    }
+
+    Ray3<T> transform(const Eigen::Matrix<T, 4, 4>& m) const
+    {
+        Eigen::Matrix<T, 4, 1> o(Eigen::Matrix<T, 4, 1>::Ones());
+        o.head(3) = origin;
+        Eigen::Matrix<T, 4, 1> d(Eigen::Matrix<T, 4, 1>::Zero());
+        d.head(3) = direction;
+        return Ray3<T>((m * o).head(3), (m * d).head(3));
     }
 
  public:
@@ -54,36 +59,11 @@ template<class T> Ray3<T>::Ray3(const Eigen::Matrix<T, 3, 1>& _origin,
 {
 }
 
-#ifdef __CELVEC__
-// Compatibility
-template<class T> Ray3<T>::Ray3(const Point3<T>& _origin,
-                                const Vector3<T>& _direction) :
-    origin(_origin.x, _origin.y, _origin.z),
-    direction(_direction.x, _direction.y, _direction.z)
-{
-}
-#endif
-
 template<class T> Eigen::Matrix<T, 3, 1> Ray3<T>::point(T t) const
 {
     return origin + direction * t;
 }
 
-#ifdef __CELVEC__
-// Compatibility
-template<class T> Ray3<T> operator*(const Ray3<T>& r, const Matrix3<T>& m)
-{
-    Eigen::Map<Eigen::Matrix<T, 3, 3> > m2(&m[0][0]);
-    return Ray3<T>(m2 * r.origin, m2 * r.direction);
-}
-
-// Compatibility
-template<class T> Ray3<T> operator*(const Ray3<T>& r, const Matrix4<T>& m)
-{
-    Eigen::Map<Eigen::Matrix<T, 4, 4> > m2(&m[0][0]);
-    return Ray3<T>(m2 * r.origin, m2 * r.direction);
-}
-#endif
+}; // namespace celmath
 
 #endif // _CELMATH_RAY_H_
-

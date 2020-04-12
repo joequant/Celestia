@@ -21,6 +21,7 @@ set(DATA_SOURCES
   stars.txt
   asteroids.ssc
   comets.ssc
+  dwarfplanets.ssc
   earth_locs.ssc
   eros_locs.ssc
   galaxies.dsc
@@ -36,6 +37,7 @@ set(DATA_SOURCES
   moon_locs.ssc
   neptunemoons_locs.ssc
   numberedmoons.ssc
+  openclusters.dsc
   outersys.ssc
   ring_locs.ssc
   saturnmoons_locs.ssc

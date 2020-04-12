@@ -33,11 +33,6 @@ bool dsoStraddlesNodesPredicate(const Vector3d& cellCenterPos, DeepSkyObject* co
     float dsoRadius    = _dso->getBoundingSphereRadius();
 
     return (_dso->getPosition() - cellCenterPos).cwiseAbs().minCoeff() < dsoRadius;
-#ifdef CELVEC
-    return abs(dsoPos.x - cellCenterPos.x) < dsoRadius    ||
-           abs(dsoPos.y - cellCenterPos.y) < dsoRadius    ||
-           abs(dsoPos.z - cellCenterPos.z) < dsoRadius;
-#endif
 }
 
 
@@ -76,8 +71,17 @@ void DSOOctree::processVisibleObjects(DSOHandler&    processor,
                                       const PointType& obsPosition,
                                       const Hyperplane<double, 3>*  frustumPlanes,
                                       float          limitingFactor,
-                                      double         scale) const
+                                      double         scale,
+                                      OctreeProcStats *stats) const
 {
+#ifdef OCTREE_DEBUG
+    size_t h;
+    if (stats != nullptr)
+    {
+        h = stats->height + 1;
+        stats->nodes++;
+    }
+#endif
     // See if this node lies within the view frustum
 
     // Test the cubic octree node against each one of the five
@@ -89,15 +93,6 @@ void DSOOctree::processVisibleObjects(DSOHandler&    processor,
         double r = scale * plane.normal().cwiseAbs().sum();
         if (plane.signedDistance(cellCenterPos) < -r)
             return;
-
-#ifdef CELVEC
-        double  r     = scale * (abs(plane->normal.x) +
-                                 abs(plane->normal.y) +
-                                 abs(plane->normal.z));
-
-        if (plane->normal * cellCenterPos - plane->d < -r)
-            return;
-#endif
     }
 
     // Compute the distance to node; this is equal to the distance to
@@ -109,6 +104,10 @@ void DSOOctree::processVisibleObjects(DSOHandler&    processor,
 
     for (unsigned int i=0; i<nObjects; ++i)
     {
+#ifdef OCTREE_DEBUG
+        if (stats != nullptr)
+            stats->objects++;
+#endif
         DeepSkyObject* _obj = _firstObject[i];
         float  absMag      = _obj->getAbsoluteMagnitude();
         if (absMag < dimmest)
@@ -134,8 +133,17 @@ void DSOOctree::processVisibleObjects(DSOHandler&    processor,
                                                     obsPosition,
                                                     frustumPlanes,
                                                     limitingFactor,
-                                                    scale * 0.5f);
+                                                    scale * 0.5f,
+                                                    stats);
+#ifdef OCTREE_DEBUG
+                if (stats != nullptr && stats->height > h)
+                    h = stats->height;
+#endif
             }
+#ifdef OCTREE_DEBUG
+            if (stats != nullptr)
+                stats->height = h;
+#endif
         }
     }
 }

@@ -15,6 +15,7 @@
 
 #include <celengine/simulation.h>
 #include <celestia/celestiacore.h>
+#include <celestia/helper.h>
 #include <celutil/utf8.h>
 
 #include "menu-context.h"
@@ -26,6 +27,7 @@
 static void wrapAction(GtkAction* action);
 static void menuMark();
 static void menuUnMark();
+static void handleContextPrimary();
 static void handleContextPlanet(gpointer data);
 static void handleContextSurface(gpointer data);
 
@@ -40,16 +42,18 @@ static GtkMenu* CreateAlternateSurfaceMenu(const vector<string>& surfaces);
 static AppData* app;
 
 
-/* Initializer. Sets the appData, since there is no way to pass it. */
-void initContext(AppData* a)
+/* Initializer. Sets the appData */
+GTKContextMenuHandler::GTKContextMenuHandler(AppData* _app) :
+    CelestiaCore::ContextMenuHandler()
 {
-    app = a;
+    // FIXME: a workaround to have it referenced by any menu callback
+    app = _app;
 }
 
 
 /* ENTRY: Context menu (event handled by appCore)
  *        Normally, float x and y, but unused, so removed. */
-void menuContext(float, float, Selection sel)
+void GTKContextMenuHandler::requestContextMenu(float, float, Selection sel)
 {
     GtkWidget* popup = gtk_menu_new();
     string name;
@@ -66,6 +70,10 @@ void menuContext(float, float, Selection sel)
             AppendMenu(popup, NULL, "S_ync Orbit", gtk_action_group_get_action(app->agMain, "SyncSelection"));
             /* Add info eventually:
              * AppendMenu(popup, NULL, "_Info", 0); */
+            if (Helper::hasPrimary(sel.body()))
+            {
+                AppendMenu(popup, GTK_SIGNAL_FUNC(handleContextPrimary), "Select Primary Body", NULL);
+            }
 
             const PlanetarySystem* satellites = sel.body()->getSatellites();
             if (satellites != NULL && satellites->getSystemSize() != 0)
@@ -98,7 +106,7 @@ void menuContext(float, float, Selection sel)
              * AppendMenu(popup, NULL, "_Info", 0); */
 
             SolarSystemCatalog* solarSystemCatalog = sim->getUniverse()->getSolarSystemCatalog();
-            SolarSystemCatalog::iterator iter = solarSystemCatalog->find(sel.star()->getCatalogNumber());
+            SolarSystemCatalog::iterator iter = solarSystemCatalog->find(sel.star()->getIndex());
             if (iter != solarSystemCatalog->end())
             {
                 SolarSystem* solarSys = iter->second;
@@ -204,6 +212,17 @@ static void handleContextPlanet(gpointer data)
 }
 
 
+/* CALLBACK: Handle an object's primary selection */
+static void handleContextPrimary()
+{
+    Selection sel = app->simulation->getSelection();
+    if (sel.body() != NULL)
+    {
+        app->simulation->setSelection(Helper::getPrimary(sel.body()));
+    }
+}
+
+
 /* CALLBACK: Handle an alternate surface from the context menu. */
 static void handleContextSurface(gpointer data)
 {
@@ -293,7 +312,9 @@ static GtkMenu* CreatePlanetarySystemMenu(string parentName, const PlanetarySyst
     vector<IntStrPair> comets;
     vector<IntStrPair> invisibles;
     vector<IntStrPair> moons;
+    vector<IntStrPair> minorMoons;
     vector<IntStrPair> planets;
+    vector<IntStrPair> dwarfPlanets;
     vector<IntStrPair> spacecraft;
 
     /* We will use these objects to iterate over all the above vectors */
@@ -319,8 +340,14 @@ static GtkMenu* CreatePlanetarySystemMenu(string parentName, const PlanetarySyst
             case Body::Moon:
                 moons.push_back(make_pair(i, body->getName()));
                 break;
+            case Body::MinorMoon:
+                minorMoons.push_back(make_pair(i, body->getName()));
+                break;
             case Body::Planet:
                 planets.push_back(make_pair(i, body->getName()));
+                break;
+            case Body::DwarfPlanet:
+                dwarfPlanets.push_back(make_pair(i, body->getName()));
                 break;
             case Body::Spacecraft:
                 spacecraft.push_back(make_pair(i, body->getName()));
@@ -337,8 +364,12 @@ static GtkMenu* CreatePlanetarySystemMenu(string parentName, const PlanetarySyst
     menuNames.push_back("Invisibles");
     objects.push_back(moons);
     menuNames.push_back("Moons");
+    objects.push_back(minorMoons);
+    menuNames.push_back("Minor moons");
     objects.push_back(planets);
     menuNames.push_back("Planets");
+    objects.push_back(dwarfPlanets);
+    menuNames.push_back("Dwarf planets");
     objects.push_back(spacecraft);
     menuNames.push_back("Spacecraft");
 

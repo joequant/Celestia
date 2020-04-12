@@ -14,18 +14,19 @@
 #include <cstdlib>
 #include <cassert>
 #include <algorithm>
-#include <fmt/printf.h>
+#include <celutil/debug.h>
 #include <celmath/mathlib.h>
-#include <celutil/util.h>
+#include <celutil/gettext.h>
 #include <celutil/bytes.h>
 #include <celutil/utf8.h>
 #include <celengine/dsodb.h>
-#include "celestia.h"
+#include <config.h>
 #include "astro.h"
 #include "parser.h"
 #include "parseobject.h"
 #include "multitexture.h"
 #include "meshmanager.h"
+#include "tokenizer.h"
 #include <celutil/debug.h>
 
 #include <celengine/galaxy.h>
@@ -55,7 +56,7 @@ struct PtrCatalogNumberOrderingPredicate
 
     bool operator()(const DeepSkyObject* const & dso0, const DeepSkyObject* const & dso1) const
     {
-        return (dso0->getCatalogNumber() < dso1->getCatalogNumber());
+        return (dso0->getIndex() < dso1->getIndex());
     }
 };
 
@@ -67,17 +68,17 @@ DSODatabase::~DSODatabase()
 }
 
 
-DeepSkyObject* DSODatabase::find(const uint32_t catalogNumber) const
+DeepSkyObject* DSODatabase::find(const AstroCatalog::IndexNumber catalogNumber) const
 {
     Galaxy refDSO;  //terrible hack !!
-    refDSO.setCatalogNumber(catalogNumber);
+    refDSO.setIndex(catalogNumber);
 
     DeepSkyObject** dso   = lower_bound(catalogNumberIndex,
                                         catalogNumberIndex + nDSOs,
                                         &refDSO,
                                         PtrCatalogNumberOrderingPredicate());
 
-    if (dso != catalogNumberIndex + nDSOs && (*dso)->getCatalogNumber() == catalogNumber)
+    if (dso != catalogNumberIndex + nDSOs && (*dso)->getIndex() == catalogNumber)
         return *dso;
     else
         return nullptr;
@@ -91,8 +92,8 @@ DeepSkyObject* DSODatabase::find(const string& name) const
 
     if (namesDB != nullptr)
     {
-        uint32_t catalogNumber   = namesDB->findCatalogNumberByName(name);
-        if (catalogNumber != DeepSkyObject::InvalidCatalogNumber)
+        AstroCatalog::IndexNumber catalogNumber   = namesDB->findCatalogNumberByName(name);
+        if (catalogNumber != AstroCatalog::InvalidIndex)
             return find(catalogNumber);
     }
 
@@ -114,7 +115,7 @@ vector<string> DSODatabase::getCompletion(const string& name) const
 
 string DSODatabase::getDSOName(const DeepSkyObject* const & dso, bool i18n) const
 {
-    uint32_t catalogNumber    = dso->getCatalogNumber();
+    AstroCatalog::IndexNumber catalogNumber    = dso->getIndex();
 
     if (namesDB != nullptr)
     {
@@ -136,7 +137,7 @@ string DSODatabase::getDSONameList(const DeepSkyObject* const & dso, const unsig
 {
     string dsoNames;
 
-    unsigned int catalogNumber   = dso->getCatalogNumber();
+    auto catalogNumber   = dso->getIndex();
 
     DSONameDatabase::NumberIndex::const_iterator iter  = namesDB->getFirstNameIter(catalogNumber);
 
@@ -160,7 +161,8 @@ void DSODatabase::findVisibleDSOs(DSOHandler&    dsoHandler,
                                   const Quaternionf& obsOrient,
                                   float fovY,
                                   float aspectRatio,
-                                  float limitingMag) const
+                                  float limitingMag,
+                                  OctreeProcStats *stats) const
 {
     // Compute the bounding planes of an infinite view frustum
     Hyperplane<double, 3> frustumPlanes[5];
@@ -187,7 +189,8 @@ void DSODatabase::findVisibleDSOs(DSOHandler&    dsoHandler,
                                       obsPos,
                                       frustumPlanes,
                                       limitingMag,
-                                      DSO_OCTREE_ROOT_SIZE);
+                                      DSO_OCTREE_ROOT_SIZE,
+                                      stats);
 }
 
 
@@ -214,12 +217,15 @@ void DSODatabase::setNameDatabase(DSONameDatabase* _namesDB)
 }
 
 
-bool DSODatabase::load(istream& in, const string& resourcePath)
+bool DSODatabase::load(istream& in, const fs::path& resourcePath)
 {
     Tokenizer tokenizer(&in);
     Parser    parser(&tokenizer);
 
-    bindtextdomain(resourcePath.c_str(), resourcePath.c_str()); // domain name is the same as resource path
+#ifdef ENABLE_NLS
+    const char *d = resourcePath.string().c_str();
+    bindtextdomain(d, d); // domain name is the same as resource path
+#endif
 
     while (tokenizer.nextToken() != Tokenizer::TokenEnd)
     {
@@ -228,17 +234,17 @@ bool DSODatabase::load(istream& in, const string& resourcePath)
 
         if (tokenizer.getTokenType() != Tokenizer::TokenName)
         {
-            DPRINTF(0, "Error parsing deep sky catalog file.\n");
+            DPRINTF(LOG_LEVEL_ERROR, "Error parsing deep sky catalog file.\n");
             return false;
         }
         objType = tokenizer.getNameValue();
 
-        bool   autoGenCatalogNumber   = true;
-        uint32_t objCatalogNumber       = DeepSkyObject::InvalidCatalogNumber;
+        bool autoGenCatalogNumber = true;
+        AstroCatalog::IndexNumber objCatalogNumber = AstroCatalog::InvalidIndex;
         if (tokenizer.getTokenType() == Tokenizer::TokenNumber)
         {
             autoGenCatalogNumber   = false;
-            objCatalogNumber       = (uint32_t) tokenizer.getNumberValue();
+            objCatalogNumber       = (AstroCatalog::IndexNumber) tokenizer.getNumberValue();
             tokenizer.nextToken();
         }
 
@@ -249,7 +255,7 @@ bool DSODatabase::load(istream& in, const string& resourcePath)
 
         if (tokenizer.nextToken() != Tokenizer::TokenString)
         {
-            DPRINTF(0, "Error parsing deep sky catalog file: bad name.\n");
+            DPRINTF(LOG_LEVEL_ERROR, "Error parsing deep sky catalog file: bad name.\n");
             return false;
         }
         objName = tokenizer.getStringValue();
@@ -258,7 +264,7 @@ bool DSODatabase::load(istream& in, const string& resourcePath)
         if (objParamsValue == nullptr ||
             objParamsValue->getType() != Value::HashType)
         {
-            DPRINTF(0, "Error parsing deep sky catalog entry %s\n", objName.c_str());
+            DPRINTF(LOG_LEVEL_ERROR, "Error parsing deep sky catalog entry %s\n", objName.c_str());
             return false;
         }
 
@@ -277,7 +283,7 @@ bool DSODatabase::load(istream& in, const string& resourcePath)
 
         if (obj != nullptr && obj->load(objParams, resourcePath))
         {
-            obj->loadCategories(objParams, DataDisposition::Add, resourcePath);
+            obj->loadCategories(objParams, DataDisposition::Add, resourcePath.string());
             delete objParamsValue;
 
             // Ensure that the DSO array is large enough
@@ -305,7 +311,7 @@ bool DSODatabase::load(istream& in, const string& resourcePath)
 
             DSOs[nDSOs++] = obj;
 
-            obj->setCatalogNumber(objCatalogNumber);
+            obj->setIndex(objCatalogNumber);
 
             if (namesDB != nullptr && !objName.empty())
             {
@@ -336,7 +342,7 @@ bool DSODatabase::load(istream& in, const string& resourcePath)
         }
         else
         {
-            DPRINTF(1, "Bad Deep Sky Object definition--will continue parsing file.\n");
+            DPRINTF(LOG_LEVEL_WARNING, "Bad Deep Sky Object definition--will continue parsing file.\n");
             delete objParamsValue;
             return false;
         }
@@ -371,7 +377,7 @@ void DSODatabase::finish()
 
 void DSODatabase::buildOctree()
 {
-    DPRINTF(1, "Sorting DSOs into octree . . .\n");
+    DPRINTF(LOG_LEVEL_INFO, "Sorting DSOs into octree . . .\n");
     float absMag             = astro::appToAbsMag(DSO_OCTREE_MAGNITUDE, DSO_OCTREE_ROOT_SIZE * (float) sqrt(3.0));
 
     // TODO: investigate using a different center--it's possible that more
@@ -383,7 +389,7 @@ void DSODatabase::buildOctree()
         root->insertObject(DSOs[i], DSO_OCTREE_ROOT_SIZE);
     }
 
-    DPRINTF(1, "Spatially sorting DSOs for improved locality of reference . . .\n");
+    DPRINTF(LOG_LEVEL_INFO, "Spatially sorting DSOs for improved locality of reference . . .\n");
     DeepSkyObject** sortedDSOs    = new DeepSkyObject*[nDSOs];
     DeepSkyObject** firstDSO      = sortedDSOs;
 
@@ -391,8 +397,8 @@ void DSODatabase::buildOctree()
     // are storing pointers to objects and not the objects themselves:
     root->rebuildAndSort(octreeRoot, firstDSO);
 
-    DPRINTF(1, "%d DSOs total\n", (int) (firstDSO - sortedDSOs));
-    DPRINTF(1, "Octree has %d nodes and %d DSOs.\n",
+    DPRINTF(LOG_LEVEL_INFO, "%d DSOs total\n", (int) (firstDSO - sortedDSOs));
+    DPRINTF(LOG_LEVEL_INFO, "Octree has %d nodes and %d DSOs.\n",
             1 + octreeRoot->countChildren(), octreeRoot->countObjects());
     //cout<<"DSOs:  "<< octreeRoot->countObjects()<<"   Nodes:"
     //    <<octreeRoot->countChildren() <<endl;
@@ -428,7 +434,7 @@ void DSODatabase::buildIndexes()
     // This should only be called once for the database
     // assert(catalogNumberIndexes[0] == nullptr);
 
-    DPRINTF(1, "Building catalog number indexes . . .\n");
+    DPRINTF(LOG_LEVEL_INFO, "Building catalog number indexes . . .\n");
 
     catalogNumberIndex = new DeepSkyObject*[nDSOs];
     for (int i = 0; i < nDSOs; ++i)

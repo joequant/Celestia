@@ -10,7 +10,7 @@
 #ifndef _CELENGINE_BODY_H_
 #define _CELENGINE_BODY_H_
 
-#include <celengine/catentry.h>
+#include <celengine/astroobj.h>
 #include <celengine/surface.h>
 #include <celengine/star.h>
 #include <celengine/location.h>
@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 #include <list>
 
 class Selection;
@@ -79,6 +80,18 @@ class PlanetarySystem
 };
 
 
+class RingRenderData
+{
+ public:
+    RingRenderData() = default;
+    virtual ~RingRenderData() = default;
+    RingRenderData(const RingRenderData&) = delete;
+    RingRenderData(RingRenderData&&) = delete;
+    RingRenderData& operator=(const RingRenderData&) = delete;
+    RingRenderData& operator=(RingRenderData&&) = delete;
+};
+
+
 class RingSystem
 {
  public:
@@ -86,6 +99,7 @@ class RingSystem
     float outerRadius;
     Color color;
     MultiResTexture texture;
+    std::shared_ptr<RingRenderData> renderData;
 
     RingSystem(float inner, float outer) :
         innerRadius(inner), outerRadius(outer),
@@ -105,7 +119,7 @@ class RingSystem
 };
 
 
-class Body : public CatEntry
+class Body : public AstroObject
 {
  public:
      EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -200,9 +214,9 @@ class Body : public CatEntry
     FrameTree* getFrameTree() const;
     FrameTree* getOrCreateFrameTree();
 
-    const ReferenceFrame* getOrbitFrame(double tdb) const;
+    const ReferenceFrame::SharedConstPtr& getOrbitFrame(double tdb) const;
     const Orbit* getOrbit(double tdb) const;
-    const ReferenceFrame* getBodyFrame(double tdb) const;
+    const ReferenceFrame::SharedConstPtr& getBodyFrame(double tdb) const;
     const RotationModel* getRotationModel(double tdb) const;
 
     // Size methods
@@ -308,24 +322,27 @@ class Body : public CatEntry
     Location* findLocation(const std::string&, bool i18n = false) const;
     void computeLocations();
 
-    bool isVisible() const { return visible == 1; }
+    bool isVisible() const { return visible; }
     void setVisible(bool _visible);
-    bool isClickable() const { return clickable == 1; }
+    bool isClickable() const { return clickable; }
     void setClickable(bool _clickable);
-    bool isVisibleAsPoint() const { return visibleAsPoint == 1; }
+    bool isVisibleAsPoint() const { return visibleAsPoint; }
     void setVisibleAsPoint(bool _visibleAsPoint);
-    bool isOrbitColorOverridden() const { return overrideOrbitColor == 1; }
+    bool isOrbitColorOverridden() const { return overrideOrbitColor; }
     void setOrbitColorOverridden(bool override);
     bool isSecondaryIlluminator() const { return secondaryIlluminator; }
     void setSecondaryIlluminator(bool enable);
 
-    bool hasVisibleGeometry() const { return classification != Invisible && visible != 0; }
+    bool hasVisibleGeometry() const { return classification != Invisible && visible; }
 
     VisibilityPolicy getOrbitVisibility() const { return orbitVisibility; }
     void setOrbitVisibility(VisibilityPolicy _orbitVisibility);
 
     Color getOrbitColor() const { return orbitColor; }
     void setOrbitColor(const Color&);
+
+    Color getCometTailColor() const { return cometTailColor; }
+    void setCometTailColor(const Color& c);
 
     int getOrbitClassification() const;
 
@@ -402,6 +419,7 @@ class Body : public CatEntry
     std::list<ReferenceMark*>* referenceMarks{ nullptr };
 
     Color orbitColor;
+    Color cometTailColor{ 0.5f, 0.5f, 0.75f };
 
     bool visible{ true };
     bool clickable{ true };

@@ -8,21 +8,23 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
+#include <config.h>
 #include <cstring>
 #include <cmath>
 #include <iomanip>
 #include <cstdio>
 #include <utility>
 #include <ctime>
-#include <celmath/mathlib.h>
-#include "celestia.h"
 #include "astro.h"
 #include "univcoord.h"
-#include <celutil/util.h>
+#include <celutil/gettext.h>
 #include <celmath/geomutil.h>
+#include <celmath/mathlib.h>
+
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 const double astro::speedOfLight = 299792.458; // km/s
 
@@ -31,9 +33,10 @@ const double astro::J2000 = 2451545.0;
 
 const double astro::G = 6.672e-11; // N m^2 / kg^2
 
-const double astro::SolarMass = 1.989e30;
-const double astro::EarthMass = 5.976e24;
-const double astro::LunarMass = 7.354e22;
+const double astro::SolarMass   = 1.989e30;
+const double astro::EarthMass   = 5.972e24;
+const double astro::LunarMass   = 7.346e22;
+const double astro::JupiterMass = 1.898e27;
 
 const double astro::SOLAR_IRRADIANCE  = 1367.6;        // Watts / m^2
 const double astro::SOLAR_POWER       = 3.8462e26;  // Watts
@@ -165,6 +168,14 @@ static const UnitDefinition angleUnits[] =
 };
 
 
+static const UnitDefinition massUnits[] =
+{
+    { "kg", 1.0 / astro::EarthMass },
+    { "mE", 1.0 },
+    { "mJ", astro::JupiterMass / astro::EarthMass },
+};
+
+
 float astro::lumToAbsMag(float lum)
 {
     return (float) (SOLAR_ABSMAG - log(lum) * LN_MAG);
@@ -215,16 +226,6 @@ void astro::decimalToHourMinSec(double angle, int& hours, int& minutes, double& 
     minutes = (int) (B);
     seconds = (B - (double) minutes) * 60.0;
 }
-
-// Compute the fraction of a sphere which is illuminated and visible
-// to a viewer.  The source of illumination is assumed to be at (0, 0, 0)
-#ifdef __CELVEC__
-float astro::sphereIlluminationFraction(Point3d /*spherePos*/,
-                                        Point3d /*viewerPos*/)
-{
-    return 1.0f;
-}
-#endif
 
 // Convert equatorial coordinates to Cartesian celestial (or ecliptical)
 // coordinates.
@@ -427,7 +428,7 @@ const char* astro::Date::toCStr(Format format) const
     cal_time.tm_sec = (int)seconds;
     cal_time.tm_wday = wday;
     cal_time.tm_gmtoff = utc_offset;
-#if defined(TARGET_OS_MAC) || defined(__FreeBSD__)
+#if defined(__APPLE__) || defined(__FreeBSD__)
     // tm_zone is a non-const string field on the Mac and FreeBSD (why?)
     cal_time.tm_zone = const_cast<char*>(tzname.c_str());
 #else
@@ -838,6 +839,21 @@ bool astro::getAngleScale(const string& unitName, double& scale)
 }
 
 
+bool astro::getMassScale(const string& unitName, double& scale)
+{
+    for (const auto& massUnit : massUnits)
+    {
+        if (massUnit.name == unitName)
+        {
+            scale = massUnit.conversion;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
 // Check if unit is a length unit
 bool astro::isLengthUnit(string unitName)
 {
@@ -859,4 +875,11 @@ bool astro::isAngleUnit(string unitName)
 {
     double dummy;
     return getAngleScale(std::move(unitName), dummy);
+}
+
+
+bool astro::isMassUnit(string unitName)
+{
+    double dummy;
+    return getMassScale(std::move(unitName), dummy);
 }

@@ -15,9 +15,10 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <cstring>
+#include <celutil/gettext.h>
+#include <celutil/winutil.h>
+#include <celmath/mathlib.h>
 #include "winstarbrowser.h"
-#include "celutil/winutil.h"
-
 #include "res/resource.h"
 
 extern void SetMouseCursor(LPCTSTR lpCursor);
@@ -56,7 +57,9 @@ bool InitStarBrowserColumns(HWND listView)
     for (i = 0; i < nColumns; i++)
         columns[i] = lvc;
 
+#ifdef ENABLE_NLS
     bind_textdomain_codeset("celestia", CurrentCP());
+#endif
 
     columns[0].pszText = _("Name");
     columns[0].cx = 100;
@@ -71,7 +74,9 @@ bool InitStarBrowserColumns(HWND listView)
     columns[3].cx = 65;
     columns[4].pszText = _("Type");
 
+#ifdef ENABLE_NLS
     bind_textdomain_codeset("celestia", "UTF8");
+#endif
 
     for (i = 0; i < nColumns; i++)
     {
@@ -110,12 +115,6 @@ struct BrighterStarPredicate
             d0 = ucPos.offsetFromLy(star0->getPosition()).norm();
         if (d1 < 1.0f)
             d1 = ucPos.offsetFromLy(star1->getPosition()).norm();
-#if CELVEC
-        if (d0 < 1.0f)
-            d0 = (toMicroLY(star0->getPosition()) - toEigen((Point3f) ucPos)).norm() * 1e-6f;
-        if (d1 < 1.0f)
-            d1 = (toMicroLY(star1->getPosition()) - toEigen((Point3f) ucPos)).norm() * 1e-6f;
-#endif
 
         return (star0->getApparentMagnitude(d0) <
                 star1->getApparentMagnitude(d1));
@@ -131,9 +130,9 @@ struct SolarSystemPredicate
     {
         SolarSystemCatalog::iterator iter;
 
-        iter = solarSystems->find(star0->getCatalogNumber());
+        iter = solarSystems->find(star0->getIndex());
         bool hasPlanets0 = (iter != solarSystems->end());
-        iter = solarSystems->find(star1->getCatalogNumber());
+        iter = solarSystems->find(star1->getIndex());
         bool hasPlanets1 = (iter != solarSystems->end());
         if (hasPlanets1 == hasPlanets0)
         {
@@ -191,10 +190,9 @@ FindStars(const StarDatabase& stardb, Pred pred, int nStars)
 
     // Move the best matching stars into the vector
     finalStars->reserve(nStars);
-    for (StarSet::const_iterator iter = firstStars.begin();
-         iter != firstStars.end(); iter++)
+    for (const auto& star : firstStars)
     {
-        finalStars->insert(finalStars->end(), *iter);
+        finalStars->insert(finalStars->end(), star);
     }
 
     return finalStars;
@@ -298,7 +296,7 @@ int CALLBACK StarBrowserCompareFunc(LPARAM lParam0, LPARAM lParam1,
         {
             float d0 = (sortInfo->pos - star0->getPosition()).norm();
             float d1 = (sortInfo->pos - star1->getPosition()).norm();
-            return (int) sign(d0 - d1);
+            return (int) celmath::sign(d0 - d1);
         }
 
     case 2:
@@ -309,18 +307,12 @@ int CALLBACK StarBrowserCompareFunc(LPARAM lParam0, LPARAM lParam1,
                 d0 = sortInfo->ucPos.offsetFromLy(star0->getPosition()).norm();
             if (d1 < 1.0f)
                 d1 = sortInfo->ucPos.offsetFromLy(star1->getPosition()).norm();
-#if CELVEC
-            if (d0 < 1.0f)
-                d0 = (toMicroLY(star0->getPosition()) - toEigen((Point3f) sortInfo->ucPos)).norm() * 1e-6f;
-            if (d1 < 1.0f)
-                d1 = (toMicroLY(star1->getPosition()) - toEigen((Point3f) sortInfo->ucPos)).norm() * 1e-6f;
-#endif
-            return (int) sign(astro::absToAppMag(star0->getAbsoluteMagnitude(), d0) -
-                              astro::absToAppMag(star1->getAbsoluteMagnitude(), d1));
+            return (int) celmath::sign(astro::absToAppMag(star0->getAbsoluteMagnitude(), d0) -
+                                       astro::absToAppMag(star1->getAbsoluteMagnitude(), d1));
         }
 
     case 3:
-        return (int) sign(star0->getAbsoluteMagnitude() - star1->getAbsoluteMagnitude());
+        return (int) celmath::sign(star0->getAbsoluteMagnitude() - star1->getAbsoluteMagnitude());
 
     case 4:
         return strcmp(star0->getSpectralType(), star1->getSpectralType());

@@ -7,19 +7,19 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include "celestia.h"
+#include <config.h>
 #include "render.h"
 #include "astro.h"
 #include "opencluster.h"
 #include "meshmanager.h"
-#include "vecgl.h"
 #include <celmath/mathlib.h>
-#include <celutil/util.h>
 #include <celutil/debug.h>
+#include <celutil/gettext.h>
 #include <algorithm>
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 
 const char* OpenCluster::getType() const
@@ -55,7 +55,7 @@ bool OpenCluster::pick(const Ray3d& ray,
 }
 
 
-bool OpenCluster::load(AssociativeArray* params, const string& resPath)
+bool OpenCluster::load(AssociativeArray* params, const fs::path& resPath)
 {
     // No parameters specific to open cluster, though a list of member stars
     // could be useful.
@@ -76,7 +76,7 @@ void OpenCluster::render(const Vector3f& /*unused*/,
 }
 
 
-unsigned int OpenCluster::getRenderMask() const
+uint64_t OpenCluster::getRenderMask() const
 {
     return Renderer::ShowOpenClusters;
 }

@@ -115,7 +115,7 @@ ScriptedOrbit::initialize(const std::string& moduleName,
     luaOrbitObjectName = GenerateScriptObjectName();
 
     // Attach the name to the script orbit
-    lua_pushvalue(luaState, -2); // dup the orbit object on top of stack
+    lua_pushvalue(luaState, -1); // dup the orbit object on top of stack
     lua_setglobal(luaState, luaOrbitObjectName.c_str());
 
     // Now, call orbit object methods to get the bounding radius
@@ -174,11 +174,6 @@ ScriptedOrbit::computePosition(double tjd) const
             if (lua_pcall(luaState, 2, 3, 0) == 0)
             {
                 pos = Vector3d(lua_tonumber(luaState, -3), lua_tonumber(luaState, -2), lua_tonumber(luaState, -1));
-#ifdef CELVEC
-                pos.x = lua_tonumber(luaState, -3);
-                pos.y = lua_tonumber(luaState, -2);
-                pos.z = lua_tonumber(luaState, -1);
-#endif
                 lua_pop(luaState, 3);
             }
             else

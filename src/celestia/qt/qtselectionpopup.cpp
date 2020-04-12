@@ -13,8 +13,10 @@
 #include <cassert>
 #include <sstream>
 #include <celestia/celestiacore.h>
+#include <celestia/helper.h>
 #include <celengine/axisarrow.h>
 #include <celengine/planetgrid.h>
+#include <celutil/gettext.h>
 #include <fmt/printf.h>
 #include "qtselectionpopup.h"
 #include "qtappwin.h"
@@ -72,9 +74,8 @@ SelectionPopup::SelectionPopup(const Selection& sel,
 
             if (startTime > -1.0e9)
             {
-                ostringstream startDateStr;
-                startDateStr << "Start: " << astro::TDBtoUTC(startTime);
-                QAction* startDateAct = new QAction(startDateStr.str().c_str(), this);
+                QString startDateStr = QString(_("Start: %1")).arg(astro::TDBtoUTC(startTime).toCStr());
+                QAction* startDateAct = new QAction(startDateStr, this);
                 connect(startDateAct, SIGNAL(triggered()),
                         this, SLOT(slotGotoStartDate()));
                 addAction(startDateAct);
@@ -82,9 +83,8 @@ SelectionPopup::SelectionPopup(const Selection& sel,
 
             if (endTime < 1.0e9)
             {
-                ostringstream endDateStr;
-                endDateStr << "End: " << astro::TDBtoUTC(endTime);
-                QAction* endDateAct = new QAction(endDateStr.str().c_str(), this);
+                QString endDateStr = QString(_("End: %1")).arg(astro::TDBtoUTC(endTime).toCStr());
+                QAction* endDateAct = new QAction(endDateStr, this);
                 connect(endDateAct, SIGNAL(triggered()),
                         this, SLOT(slotGotoEndDate()));
                 addAction(endDateAct);
@@ -180,19 +180,23 @@ SelectionPopup::SelectionPopup(const Selection& sel,
         addAction(action);
     }
 
-    // Reference vector submenu
     if (selection.body() != nullptr)
     {
+        // Reference vector submenu
         QMenu* refVecMenu = createReferenceVectorMenu();
         addMenu(refVecMenu);
-    }
 
-    if (selection.body() != nullptr)
-    {
         // Alternate surface submenu
         QMenu* surfacesMenu = createAlternateSurfacesMenu();
         if (surfacesMenu != nullptr)
             addMenu(surfacesMenu);
+
+        if (Helper::hasPrimary(selection.body()))
+        {
+            QAction *action = new QAction(_("Select Primary Body"), this);
+            connect(action, SIGNAL(triggered()), this, SLOT(slotSelectPrimary()));
+            addAction(action);
+        }
 
         // Child object menus
         PlanetarySystem* sys = selection.body()->getSatellites();
@@ -203,7 +207,7 @@ SelectionPopup::SelectionPopup(const Selection& sel,
     {
         // Child object menus for star
         SolarSystemCatalog* solarSystemCatalog = sim->getUniverse()->getSolarSystemCatalog();
-        SolarSystemCatalog::iterator iter = solarSystemCatalog->find(selection.star()->getCatalogNumber());
+        SolarSystemCatalog::iterator iter = solarSystemCatalog->find(selection.star()->getIndex());
         if (iter != solarSystemCatalog->end())
         {
             SolarSystem* solarSys = iter->second;
@@ -382,8 +386,14 @@ QMenu* SelectionPopup::createObjectMenu(PlanetarySystem* sys,
                     case Body::Planet:
                         title = _("Planets");
                         break;
+                    case Body::DwarfPlanet:
+                        title = _("Dwarf planets");
+                        break;
                     case Body::Moon:
                         title = _("Moons");
+                        break;
+                    case Body::MinorMoon:
+                        title = _("Minor moons");
                         break;
                     case Body::Asteroid:
                         title = _("Asteroids");
@@ -420,9 +430,17 @@ void SelectionPopup::addObjectMenus(PlanetarySystem* sys)
     if (planetsMenu != nullptr)
         addMenu(planetsMenu);
 
+    QMenu* dwarfPlanetsMenu = createObjectMenu(sys, Body::DwarfPlanet);
+    if (dwarfPlanetsMenu != nullptr)
+        addMenu(dwarfPlanetsMenu);
+
     QMenu* moonsMenu = createObjectMenu(sys, Body::Moon);
     if (moonsMenu != nullptr)
         addMenu(moonsMenu);
+
+    QMenu* minorMoonsMenu = createObjectMenu(sys, Body::MinorMoon);
+    if (minorMoonsMenu != nullptr)
+        addMenu(minorMoonsMenu);
 
     QMenu* asteroidsMenu = createObjectMenu(sys, Body::Asteroid);
     if (asteroidsMenu != nullptr)
@@ -498,6 +516,17 @@ void SelectionPopup::slotSelectAlternateSurface()
 }
 
 
+void SelectionPopup::slotSelectPrimary()
+{
+    Body *selectedBody = selection.body();
+    if (selectedBody != nullptr)
+    {
+        Simulation* sim = appCore->getSimulation();
+        sim->setSelection(Helper::getPrimary(selectedBody));
+    }
+}
+
+
 void SelectionPopup::slotSelectChildObject()
 {
     QAction* action = qobject_cast<QAction*>(sender());
@@ -516,7 +545,7 @@ void SelectionPopup::slotSelectChildObject()
             else if (selection.star())
             {
                 SolarSystemCatalog* solarSystemCatalog = sim->getUniverse()->getSolarSystemCatalog();
-                SolarSystemCatalog::iterator iter = solarSystemCatalog->find(selection.star()->getCatalogNumber());
+                SolarSystemCatalog::iterator iter = solarSystemCatalog->find(selection.star()->getIndex());
                 if (iter != solarSystemCatalog->end())
                 {
                     SolarSystem* solarSys = iter->second;

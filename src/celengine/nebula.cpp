@@ -7,7 +7,7 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include "celestia.h"
+#include <config.h>
 #include "vecgl.h"
 #include "render.h"
 #include "astro.h"
@@ -15,12 +15,13 @@
 #include "meshmanager.h"
 #include "rendcontext.h"
 #include <celmath/mathlib.h>
-#include <celutil/util.h>
 #include <celutil/debug.h>
+#include <celutil/gettext.h>
 #include <algorithm>
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 
 const char* Nebula::getType() const
@@ -66,11 +67,12 @@ bool Nebula::pick(const Ray3d& ray,
 }
 
 
-bool Nebula::load(AssociativeArray* params, const string& resPath)
+bool Nebula::load(AssociativeArray* params, const fs::path& resPath)
 {
-    string geometryFileName;
-    if (params->getString("Mesh", geometryFileName))
+    string t;
+    if (params->getString("Mesh", t))
     {
+        fs::path geometryFileName(t);
         ResourceHandle geometryHandle =
             GetGeometryManager()->getHandle(GeometryInfo(geometryFileName, resPath));
         setGeometry(geometryHandle);
@@ -106,7 +108,7 @@ void Nebula::render(const Vector3f& /*unused*/,
 }
 
 
-unsigned int Nebula::getRenderMask() const
+uint64_t Nebula::getRenderMask() const
 {
     return Renderer::ShowNebulae;
 }

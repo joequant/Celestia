@@ -7,14 +7,14 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
+#include <config.h>
 #include <iostream>
 #include <fstream>
 #include <cassert>
 #include <celutil/debug.h>
-#include <celutil/directory.h>
 #include <celutil/util.h>
-#include <celengine/celestia.h>
 #include <celengine/texmanager.h>
+#include <celengine/tokenizer.h>
 #include "configfile.h"
 
 using namespace std;
@@ -32,12 +32,12 @@ static unsigned int getUint(Hash* params,
 }
 
 
-CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *config)
+CelestiaConfig* ReadCelestiaConfig(const fs::path& filename, CelestiaConfig *config)
 {
-    ifstream configFile(filename);
+    ifstream configFile(filename.string());
     if (!configFile.good())
     {
-        DPRINTF(0, "Error opening config file '%s'.\n", filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "Error opening config file '%s'.\n", filename);
         return config;
     }
 
@@ -46,14 +46,14 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
 
     if (tokenizer.nextToken() != Tokenizer::TokenName)
     {
-        DPRINTF(0, "%s:%d 'Configuration' expected.\n", filename.c_str(),
+        DPRINTF(LOG_LEVEL_ERROR, "%s:%d 'Configuration' expected.\n", filename,
                 tokenizer.getLineNumber());
         return config;
     }
 
     if (tokenizer.getStringValue() != "Configuration")
     {
-        DPRINTF(0, "%s:%d 'Configuration' expected.\n", filename.c_str(),
+        DPRINTF(LOG_LEVEL_ERROR, "%s:%d 'Configuration' expected.\n", filename,
                 tokenizer.getLineNumber());
         return config;
     }
@@ -61,7 +61,7 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
     Value* configParamsValue = parser.readValue();
     if (configParamsValue == nullptr || configParamsValue->getType() != Value::HashType)
     {
-        DPRINTF(0, "%s: Bad configuration file.\n", filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "%s: Bad configuration file.\n", filename);
         return config;
     }
 
@@ -72,43 +72,33 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
 
 #ifdef CELX
     config->configParams = configParams;
-    configParams->getString("LuaHook", config->luaHook);
-    config->luaHook = WordExp(config->luaHook);
+    configParams->getPath("LuaHook", config->luaHook);
 #endif
 
     config->faintestVisible = 6.0f;
     configParams->getNumber("FaintestVisibleMagnitude", config->faintestVisible);
-    configParams->getString("FavoritesFile", config->favoritesFile);
-    config->favoritesFile = WordExp(config->favoritesFile);
-    configParams->getString("DestinationFile", config->destinationsFile);
-    config->destinationsFile = WordExp(config->destinationsFile);
-    configParams->getString("InitScript", config->initScriptFile);
-    config->initScriptFile = WordExp(config->initScriptFile);
-    configParams->getString("DemoScript", config->demoScriptFile);
-    config->demoScriptFile = WordExp(config->demoScriptFile);
-    configParams->getString("AsterismsFile", config->asterismsFile);
-    config->asterismsFile = WordExp(config->asterismsFile);
-    configParams->getString("BoundariesFile", config->boundariesFile);
-    config->boundariesFile = WordExp(config->boundariesFile);
-    configParams->getString("StarDatabase", config->starDatabaseFile);
-    config->starDatabaseFile = WordExp(config->starDatabaseFile);
-    configParams->getString("StarNameDatabase", config->starNamesFile);
-    config->starNamesFile = WordExp(config->starNamesFile);
-    configParams->getString("HDCrossIndex", config->HDCrossIndexFile);
-    config->HDCrossIndexFile = WordExp(config->HDCrossIndexFile);
-    configParams->getString("SAOCrossIndex", config->SAOCrossIndexFile);
-    config->SAOCrossIndexFile = WordExp(config->SAOCrossIndexFile);
-    configParams->getString("GlieseCrossIndex", config->GlieseCrossIndexFile);
-    config->GlieseCrossIndexFile = WordExp(config->GlieseCrossIndexFile);
+    configParams->getPath("FavoritesFile", config->favoritesFile);
+    configParams->getPath("DestinationFile", config->destinationsFile);
+    configParams->getPath("InitScript", config->initScriptFile);
+    configParams->getPath("DemoScript", config->demoScriptFile);
+    configParams->getPath("AsterismsFile", config->asterismsFile);
+    configParams->getPath("BoundariesFile", config->boundariesFile);
+    configParams->getPath("StarDatabase", config->starDatabaseFile);
+    configParams->getPath("StarNameDatabase", config->starNamesFile);
+    configParams->getPath("HDCrossIndex", config->HDCrossIndexFile);
+    configParams->getPath("SAOCrossIndex", config->SAOCrossIndexFile);
+    configParams->getPath("GlieseCrossIndex", config->GlieseCrossIndexFile);
     configParams->getString("Font", config->mainFont);
     configParams->getString("LabelFont", config->labelFont);
     configParams->getString("TitleFont", config->titleFont);
-    configParams->getString("LogoTexture", config->logoTextureFile);
+    configParams->getPath("LogoTexture", config->logoTextureFile);
     configParams->getString("Cursor", config->cursor);
 
     float maxDist = 1.0;
     configParams->getNumber("SolarSystemMaxDistance", maxDist);
     config->SolarSystemMaxDistance = min(max(maxDist, 1.0f), 10.0f);
+
+    config->ShadowMapSize = getUint(configParams, "ShadowMapSize", 0);
 
     double aaSamples = 1;
     configParams->getNumber("AntialiasingSamples", aaSamples);
@@ -123,8 +113,7 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
     configParams->getNumber("MouseRotationSensitivity", config->mouseRotationSensitivity);
     config->reverseMouseWheel = false;
     configParams->getBoolean("ReverseMouseWheel", config->reverseMouseWheel);
-    configParams->getString("ScriptScreenshotDirectory", config->scriptScreenshotDirectory);
-    config->scriptScreenshotDirectory = WordExp(config->scriptScreenshotDirectory);
+    configParams->getPath("ScriptScreenshotDirectory", config->scriptScreenshotDirectory);
     config->scriptSystemAccessPolicy = "ask";
     configParams->getString("ScriptSystemAccessPolicy", config->scriptSystemAccessPolicy);
 
@@ -135,7 +124,6 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
     config->linearFadeFraction = 0.0f;
     configParams->getNumber("LinearFadeFraction", config->linearFadeFraction);
 
-    config->ringSystemSections = getUint(configParams, "RingSystemSections", 100);
     config->orbitPathSamplePoints = getUint(configParams, "OrbitPathSamplePoints", 100);
     config->shadowTextureSize = getUint(configParams, "ShadowTextureSize", 256);
     config->eclipseTextureSize = getUint(configParams, "EclipseTextureSize", 128);
@@ -147,7 +135,7 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
     {
         if (solarSystemsVal->getType() != Value::ArrayType)
         {
-            DPRINTF(0, "%s: SolarSystemCatalogs must be an array.\n", filename.c_str());
+            DPRINTF(LOG_LEVEL_ERROR, "%s: SolarSystemCatalogs must be an array.\n", filename);
         }
         else
         {
@@ -159,12 +147,11 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
                 // assert(catalogNameVal != nullptr);
                 if (catalogNameVal->getType() == Value::StringType)
                 {
-                    config->solarSystemFiles.push_back(WordExp(catalogNameVal->getString()));
+                    config->solarSystemFiles.push_back(PathExp(catalogNameVal->getString()));
                 }
                 else
                 {
-                    DPRINTF(0, "%s: Solar system catalog name must be a string.\n",
-                            filename.c_str());
+                    DPRINTF(LOG_LEVEL_ERROR, "%s: Solar system catalog name must be a string.\n", filename);
                 }
             }
         }
@@ -175,8 +162,7 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
     {
         if (starCatalogsVal->getType() != Value::ArrayType)
         {
-            DPRINTF(0, "%s: StarCatalogs must be an array.\n",
-                    filename.c_str());
+            DPRINTF(LOG_LEVEL_ERROR, "%s: StarCatalogs must be an array.\n", filename);
         }
         else
         {
@@ -189,12 +175,11 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
 
                 if (catalogNameVal->getType() == Value::StringType)
                 {
-                    config->starCatalogFiles.push_back(WordExp(catalogNameVal->getString()));
+                    config->starCatalogFiles.push_back(PathExp(catalogNameVal->getString()));
                 }
                 else
                 {
-                    DPRINTF(0, "%s: Star catalog name must be a string.\n",
-                            filename.c_str());
+                    DPRINTF(LOG_LEVEL_ERROR, "%s: Star catalog name must be a string.\n", filename);
                 }
             }
         }
@@ -205,8 +190,7 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
     {
         if (dsoCatalogsVal->getType() != Value::ArrayType)
         {
-            DPRINTF(0, "%s: DeepSkyCatalogs must be an array.\n",
-                    filename.c_str());
+            DPRINTF(LOG_LEVEL_ERROR, "%s: DeepSkyCatalogs must be an array.\n", filename);
         }
         else
         {
@@ -219,12 +203,11 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
 
                 if (catalogNameVal->getType() == Value::StringType)
                 {
-                    config->dsoCatalogFiles.push_back(WordExp(catalogNameVal->getString()));
+                    config->dsoCatalogFiles.push_back(PathExp(catalogNameVal->getString()));
                 }
                 else
                 {
-                    DPRINTF(0, "%s: DeepSky catalog name must be a string.\n",
-                            filename.c_str());
+                    DPRINTF(LOG_LEVEL_ERROR, "%s: DeepSky catalog name must be a string.\n", filename);
                 }
             }
         }
@@ -242,22 +225,21 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
             {
                 if (dirNameVal->getType() == Value::StringType)
                 {
-                    config->extrasDirs.push_back(WordExp(dirNameVal->getString()));
+                    config->extrasDirs.push_back(PathExp(dirNameVal->getString()));
                 }
                 else
                 {
-                    DPRINTF(0, "%s: Extras directory name must be a string.\n",
-                            filename.c_str());
+                    DPRINTF(LOG_LEVEL_ERROR, "%s: Extras directory name must be a string.\n", filename);
                 }
             }
         }
         else if (extrasDirsVal->getType() == Value::StringType)
         {
-            config->extrasDirs.push_back(WordExp(extrasDirsVal->getString()));
+            config->extrasDirs.push_back(PathExp(extrasDirsVal->getString()));
         }
         else
         {
-            DPRINTF(0, "%s: ExtrasDirectories must be an array or string.\n", filename.c_str());
+            DPRINTF(LOG_LEVEL_ERROR, "%s: ExtrasDirectories must be an array or string.\n", filename);
         }
     }
 
@@ -266,8 +248,7 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
     {
         if (ignoreExtVal->getType() != Value::ArrayType)
         {
-            DPRINTF(0, "%s: IgnoreGLExtensions must be an array.\n",
-                    filename.c_str());
+            DPRINTF(LOG_LEVEL_ERROR, "%s: IgnoreGLExtensions must be an array.\n", filename);
         }
         else
         {
@@ -281,7 +262,7 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
                 }
                 else
                 {
-                    DPRINTF(0, "%s: extension name must be a string.\n", filename.c_str());
+                    DPRINTF(LOG_LEVEL_ERROR, "%s: extension name must be a string.\n", filename);
                 }
             }
         }
@@ -292,7 +273,7 @@ CelestiaConfig* ReadCelestiaConfig(const string& filename, CelestiaConfig *confi
     {
         if (starTexValue->getType() != Value::HashType)
         {
-            DPRINTF(0, "%s: StarTextures must be a property list.\n", filename.c_str());
+            DPRINTF(LOG_LEVEL_ERROR, "%s: StarTextures must be a property list.\n", filename);
         }
         else
         {

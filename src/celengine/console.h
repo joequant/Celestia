@@ -11,11 +11,10 @@
 #define _CELENGINE_CONSOLE_H_
 
 #include <string>
-#include <iostream>
-#include <celtxf/texturefont.h>
-
+#include <iosfwd>
 
 class Console;
+class TextureFont;
 
 // Custom streambuf class to support C++ operator style output.  The
 // output is completely unbuffered.
@@ -55,6 +54,11 @@ class Console : public std::ostream
 
     void setScale(int, int);
     void setFont(TextureFont*);
+
+    void setColor(float r, float g, float b, float a) const;
+    void setColor(const Color& c) const;
+
+    void moveBy(float dx, float dy, float dz = 0.0f) const;
 
     void print(wchar_t);
     void print(char*);

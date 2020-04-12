@@ -27,6 +27,8 @@
 // License and a copy of the GNU General Public License along with
 // orbitpath. If not, see <http://www.gnu.org/licenses/>.
 
+#pragma once
+
 #include <deque>
 #include <Eigen/Geometry>
 
@@ -71,14 +73,16 @@ class CurvePlot
                 double nearZ,
                 double farZ,
                 const Eigen::Vector3d viewFrustumPlaneNormals[],
-                double subdivisionThreshold) const;
+                double subdivisionThreshold,
+                const Eigen::Vector4f& color) const;
     void render(const Eigen::Affine3d& modelview,
                 double nearZ,
                 double farZ,
                 const Eigen::Vector3d viewFrustumPlaneNormals[],
                 double subdivisionThreshold,
                 double startTime,
-                double endTime) const;
+                double endTime,
+                const Eigen::Vector4f& color) const;
     void renderFaded(const Eigen::Affine3d& modelview,
                      double nearZ,
                      double farZ,

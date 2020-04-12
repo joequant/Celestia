@@ -14,6 +14,7 @@
 #include "spiceinterface.h"
 #include <celengine/astro.h>
 #include <celmath/geomutil.h>
+#include <celmath/mathlib.h>
 #include "SpiceUsr.h"
 #include <iostream>
 #include <cstdio>
@@ -21,6 +22,7 @@
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 
 static const double MILLISEC = astro::secsToDays(0.001);
@@ -91,7 +93,7 @@ SpiceRotation::getPeriod() const
 
 
 bool
-SpiceRotation::init(const string& path,
+SpiceRotation::init(const fs::path& path,
                     const list<string>* requiredKernels)
 {
     // Load required kernel files
@@ -99,7 +101,7 @@ SpiceRotation::init(const string& path,
     {
         for (const auto& kernel : *requiredKernels)
         {
-            string filepath = path + string("/data/") + kernel;
+            fs::path filepath = path / "data" / kernel;
             if (!LoadSpiceKernel(filepath))
             {
                 m_spiceErr = true;

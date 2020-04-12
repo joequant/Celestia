@@ -13,14 +13,17 @@
 #include "texmanager.h"
 #include "modelgeometry.h"
 #include "body.h"
-#include <GL/glew.h>
-#include "vecgl.h"
+#include "glsupport.h"
+#include <celmath/geomutil.h>
 #include "render.h"
 
 using namespace cmod;
 using namespace Eigen;
 using namespace std;
 
+#ifndef GL_ONLY_SHADOWS
+#define GL_ONLY_SHADOWS 1
+#endif
 
 static Material defaultMaterial;
 
@@ -167,7 +170,6 @@ RenderContext::drawGroup(const Mesh::PrimitiveGroup& group)
     {
         glEnable(GL_POINT_SPRITE);
         glActiveTexture(GL_TEXTURE0);
-        glTexEnvi(GL_POINT_SPRITE, GL_COORD_REPLACE, GL_TRUE);
         glEnable(GL_VERTEX_PROGRAM_POINT_SIZE);
     }
 
@@ -180,6 +182,37 @@ RenderContext::drawGroup(const Mesh::PrimitiveGroup& group)
     {
         glDisable(GL_POINT_SPRITE);
         glDisable(GL_VERTEX_PROGRAM_POINT_SIZE);
+    }
+}
+
+
+void
+RenderContext::setVertexArrays(const Mesh::VertexDescription& desc,
+                               const void* vertexData)
+{
+    setStandardVertexArrays(desc, vertexData);
+    setExtendedVertexArrays(desc, vertexData);
+
+    // Normally, the shader that will be used depends only on the material.
+    // But the presence of point size and normals can also affect the
+    // shader, so force an update of the material if those attributes appear
+    // or disappear in the new set of vertex arrays.
+    bool usePointSizeNow = (desc.getAttribute(Mesh::PointSize).format == Mesh::Float1);
+    bool useNormalsNow = (desc.getAttribute(Mesh::Normal).format == Mesh::Float3);
+    bool useColorsNow = (desc.getAttribute(Mesh::Color0).format != Mesh::InvalidFormat);
+    bool useTexCoordsNow = (desc.getAttribute(Mesh::Texture0).format != Mesh::InvalidFormat);
+
+    if (usePointSizeNow != usePointSize ||
+        useNormalsNow   != useNormals   ||
+        useColorsNow    != useColors    ||
+        useTexCoordsNow != useTexCoords)
+    {
+        usePointSize = usePointSizeNow;
+        useNormals = useNormalsNow;
+        useColors = useColorsNow;
+        useTexCoords = useTexCoordsNow;
+        if (getMaterial() != nullptr)
+            makeCurrent(*getMaterial());
     }
 }
 
@@ -492,6 +525,10 @@ GLSL_RenderContext::makeCurrent(const Material& m)
             shaderProps.texUsage |= ShaderProperties::Scattering;
     }
 
+    bool hasShadowMap = shadowMap != 0 && shadowMapWidth != 0 && lightMatrix != nullptr;
+    if (hasShadowMap)
+        shaderProps.texUsage |= ShaderProperties::ShadowMapTexture;
+
     // Get a shader for the current rendering configuration
     assert(renderer != nullptr);
     CelestiaGLProgram* prog = renderer->getShaderManager().getShader(shaderProps);
@@ -503,8 +540,21 @@ GLSL_RenderContext::makeCurrent(const Material& m)
     for (unsigned int i = 0; i < nTextures; i++)
     {
         glActiveTexture(GL_TEXTURE0 + i);
-        glEnable(GL_TEXTURE_2D);
         textures[i]->bind();
+    }
+
+    if (hasShadowMap)
+    {
+        glActiveTexture(GL_TEXTURE0 + nTextures);
+        glBindTexture(GL_TEXTURE_2D, shadowMap);
+#if GL_ONLY_SHADOWS
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_R_TO_TEXTURE);
+#endif
+        Matrix4f shadowBias(Matrix4f::Zero());
+        shadowBias.diagonal() = Vector4f(0.5f, 0.5f, 0.5f, 1.0f);
+        shadowBias.col(3) = Vector4f(0.5f, 0.5f, 0.5f, 1.0f);
+        prog->ShadowMatrix0 = shadowBias * (*lightMatrix);
+        prog->floatParam("shadowMapSize") = static_cast<float>(shadowMapWidth);
     }
 
     // setLightParameters() expects opacity in the alpha channel of the diffuse color
@@ -604,37 +654,6 @@ GLSL_RenderContext::makeCurrent(const Material& m)
 
 
 void
-GLSL_RenderContext::setVertexArrays(const Mesh::VertexDescription& desc,
-                                    const void* vertexData)
-{
-    setStandardVertexArrays(desc, vertexData);
-    setExtendedVertexArrays(desc, vertexData);
-
-    // Normally, the shader that will be used depends only on the material.
-    // But the presence of point size and normals can also affect the
-    // shader, so force an update of the material if those attributes appear
-    // or disappear in the new set of vertex arrays.
-    bool usePointSizeNow = (desc.getAttribute(Mesh::PointSize).format == Mesh::Float1);
-    bool useNormalsNow = (desc.getAttribute(Mesh::Normal).format == Mesh::Float3);
-    bool useColorsNow = (desc.getAttribute(Mesh::Color0).format != Mesh::InvalidFormat);
-    bool useTexCoordsNow = (desc.getAttribute(Mesh::Texture0).format != Mesh::InvalidFormat);
-
-    if (usePointSizeNow != usePointSize ||
-        useNormalsNow   != useNormals   ||
-        useColorsNow    != useColors    ||
-        useTexCoordsNow != useTexCoords)
-    {
-        usePointSize = usePointSizeNow;
-        useNormals = useNormalsNow;
-        useColors = useColorsNow;
-        useTexCoords = useTexCoordsNow;
-        if (getMaterial() != nullptr)
-            makeCurrent(*getMaterial());
-    }
-}
-
-
-void
 GLSL_RenderContext::setAtmosphere(const Atmosphere* _atmosphere)
 {
     atmosphere = _atmosphere;
@@ -647,6 +666,13 @@ GLSL_RenderContext::setLunarLambert(float l)
     lunarLambert = l;
 }
 
+void
+GLSL_RenderContext::setShadowMap(GLuint _shadowMap, GLuint _width, const Eigen::Matrix4f *_lightMatrix)
+{
+    shadowMap      = _shadowMap;
+    shadowMapWidth = _width;
+    lightMatrix    = _lightMatrix;
+}
 
 /***** GLSL-Unlit render context ******/
 
@@ -718,7 +744,6 @@ GLSLUnlit_RenderContext::makeCurrent(const Material& m)
     for (unsigned int i = 0; i < nTextures; i++)
     {
         glActiveTexture(GL_TEXTURE0 + i);
-        glEnable(GL_TEXTURE_2D);
         textures[i]->bind();
     }
 
@@ -767,36 +792,5 @@ GLSLUnlit_RenderContext::makeCurrent(const Material& m)
             glDepthMask(GL_TRUE);
             break;
         }
-    }
-}
-
-
-void
-GLSLUnlit_RenderContext::setVertexArrays(const Mesh::VertexDescription& desc,
-                                         const void* vertexData)
-{
-    setStandardVertexArrays(desc, vertexData);
-    setExtendedVertexArrays(desc, vertexData);
-
-    // Normally, the shader that will be used depends only on the material.
-    // But the presence of point size and normals can also affect the
-    // shader, so force an update of the material if those attributes appear
-    // or disappear in the new set of vertex arrays.
-    bool usePointSizeNow = (desc.getAttribute(Mesh::PointSize).format == Mesh::Float1);
-    bool useNormalsNow = (desc.getAttribute(Mesh::Normal).format == Mesh::Float3);
-    bool useColorsNow = (desc.getAttribute(Mesh::Color0).format != Mesh::InvalidFormat);
-    bool useTexCoordsNow = (desc.getAttribute(Mesh::Texture0).format != Mesh::InvalidFormat);
-
-    if (usePointSizeNow != usePointSize ||
-        useNormalsNow   != useNormals   ||
-        useColorsNow    != useColors    ||
-        useTexCoordsNow != useTexCoords)
-    {
-        usePointSize = usePointSizeNow;
-        useNormals = useNormalsNow;
-        useColors = useColorsNow;
-        useTexCoords = useTexCoordsNow;
-        if (getMaterial() != nullptr)
-            makeCurrent(*getMaterial());
     }
 }

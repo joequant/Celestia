@@ -11,9 +11,10 @@
 #include <algorithm>
 #include <iostream>
 #include <iomanip>
+#include <celengine/parser.h>
+#include <celengine/tokenizer.h>
 #include <celutil/debug.h>
 #include <celutil/util.h>
-#include <celengine/cmdparser.h>
 #include "favorites.h"
 
 using namespace Eigen;
@@ -30,7 +31,7 @@ FavoritesList* ReadFavoritesList(istream& in)
     {
         if (tokenizer.getTokenType() != Tokenizer::TokenString)
         {
-            DPRINTF(0, "Error parsing favorites file.\n");
+            DPRINTF(LOG_LEVEL_ERROR, "Error parsing favorites file.\n");
             for_each(favorites->begin(), favorites->end(), deleteFunc<FavoritesEntry*>());
             delete favorites;
             return nullptr;
@@ -42,7 +43,7 @@ FavoritesList* ReadFavoritesList(istream& in)
         Value* favParamsValue = parser.readValue();
         if (favParamsValue == nullptr || favParamsValue->getType() != Value::HashType)
         {
-            DPRINTF(0, "Error parsing favorites entry %s\n", fav->name.c_str());
+            DPRINTF(LOG_LEVEL_ERROR, "Error parsing favorites entry %s\n", fav->name.c_str());
             for_each(favorites->begin(), favorites->end(), deleteFunc<FavoritesEntry*>());
             delete favorites;
             if (favParamsValue != nullptr)
@@ -72,10 +73,6 @@ FavoritesList* ReadFavoritesList(istream& in)
         favParams->getVector("base", base);
         favParams->getVector("offset", offset);
         fav->position = UniversalCoord::CreateLy(base) + UniversalCoord::CreateLy(offset * 1.0e-6);
-#ifdef CELVEC
-        base *= 1e6;
-        fav->position = UniversalCoord(Point3d(base.x, base.y, base.z)) + offset;
-#endif
 
         // Get orientation
         Vector3d axis = Vector3d::UnitX();
@@ -83,10 +80,6 @@ FavoritesList* ReadFavoritesList(istream& in)
         favParams->getVector("axis", axis);
         favParams->getNumber("angle", angle);
         fav->orientation = Quaternionf(AngleAxisf((float) angle, axis.cast<float>()));
-#ifdef CELVEC
-        fav->orientation.setAxisAngle(Vec3f((float) axis.x, (float) axis.y, (float) axis.z),
-                                      (float) angle);
-#endif
 
         // Get time
         fav->jd = 0.0;
@@ -130,14 +123,6 @@ void WriteFavoritesList(FavoritesList& favorites, ostream& out)
                         (double) (fav->position.y - (BigFix) baseUly.y()),
                         (double) (fav->position.z - (BigFix) baseUly.z()));
         Vector3d base = baseUly * 1e-6; // Base is in micro-light years
-
-        // This was the old way of doing things, before the confusing operators
-        // and implicit casts were removed from UniversalCoord.
-#ifdef CELVEC
-        Point3d base = (Point3d) fav->position;
-        Vec3d offset = fav->position - base;
-        base.x *= 1e-6; base.y *= 1e-6; base.z *= 1e-6;
-#endif
 
         out << '"' << fav->name << "\" {\n";
         if(fav->isFolder)

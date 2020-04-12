@@ -7,83 +7,29 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include <fstream>
-
-#ifndef TARGET_OS_MAC
-#define JPEG_SUPPORT
-#define PNG_SUPPORT
-#endif
-
-#ifdef TARGET_OS_MAC
-#include <unistd.h>
-#include "CGBuffer.h"
-#ifndef PNG_SUPPORT
-#include <Quicktime/ImageCompression.h>
-#include <QuickTime/QuickTimeComponents.h>
-#endif
-#endif
-
-#ifndef _WIN32
-#ifndef TARGET_OS_MAC
 #include <config.h>
-#endif /* ! TARGET_OS_MAC */
-#endif /* ! _WIN32 */
-
-#include "image.h"
-
-#ifdef JPEG_SUPPORT
-
-#ifndef PNG_SUPPORT
-#include "setjmp.h"
-#endif // PNG_SUPPORT
+#include <algorithm>
+#include <cassert>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <fstream>
+#include <iostream>
 
 extern "C" {
-#ifdef _WIN32
-#include "jpeglib.h"
-#else
-#include <cstdio>
 #include <jpeglib.h>
-#endif
 }
+#include <png.h>
 
-#endif // JPEG_SUPPORT
-
-#ifdef PNG_SUPPORT // PNG_SUPPORT
-#ifdef TARGET_OS_MAC
-#include "../../macosx/png.h"
-#else
-#include "png.h"
-#endif // TARGET_OS_MAC
+#include "glsupport.h"
 
 #include <celutil/debug.h>
-#include <celutil/util.h>
 #include <celutil/filetype.h>
-#include <GL/glew.h>
-#include "celestia.h"
+#include <celutil/gettext.h>
+#include "image.h"
 
-#include <cassert>
-#include <iostream>
-#include <algorithm>
-#include <cmath>
-#include <cstring>
-#include <fmt/printf.h>
 
 using namespace std;
-
-
-// Define png_jmpbuf() in case we are using a pre-1.0.6 version of libpng
-#ifndef png_jmpbuf
-#define png_jmpbuf(png_ptr) png_ptr->jmpbuf
-#endif // PNG_SUPPORT
-
-// Define various expansion transformations for old versions of libpng
-#if PNG_LIBPNG_VER < 10004
-#define png_set_palette_to_rgb(p)  png_set_expand(p)
-#define png_set_gray_1_2_4_to_8(p) png_set_expand(p)
-#define png_set_tRNS_to_alpha(p)   png_set_expand(p)
-#endif // PNG_LIBPNG_VER < 10004
-
-#endif // PNG_SUPPORT
 
 
 // All rows are padded to a size that's a multiple of 4 bytes
@@ -144,10 +90,10 @@ static int calcMipLevelSize(int fmt, int w, int h, int mip)
 }
 
 
-Image::Image(int fmt, int w, int h, int mips) :
+Image::Image(int fmt, int w, int h, int mip) :
     width(w),
     height(h),
-    mipLevels(mips),
+    mipLevels(mip),
     format(fmt)
 {
     components = formatComponents(fmt);
@@ -362,12 +308,12 @@ Image* Image::computeNormalMap(float scale, bool wrap) const
 }
 
 
-Image* LoadImageFromFile(const string& filename)
+Image* LoadImageFromFile(const fs::path& filename)
 {
     ContentType type = DetermineFileType(filename);
     Image* img = nullptr;
 
-    fmt::fprintf(clog, _("Loading image from file %s\n"), filename);
+    fmt::fprintf(clog, _("Loading image from file %s\n"), filename.string());
 
     switch (type)
     {
@@ -385,7 +331,7 @@ Image* LoadImageFromFile(const string& filename)
         img = LoadDDSImage(filename);
         break;
     default:
-        fmt::printf(_("%s: unrecognized or unsupported image file type.\n"), filename);
+        DPRINTF(LOG_LEVEL_ERROR, "%s: unrecognized or unsupported image file type.\n", filename.string());
         break;
     }
 
@@ -395,8 +341,6 @@ Image* LoadImageFromFile(const string& filename)
 
 
 
-
-#ifdef JPEG_SUPPORT
 
 struct my_error_mgr
 {
@@ -418,12 +362,10 @@ METHODDEF(void) my_error_exit(j_common_ptr cinfo)
     // Return control to the setjmp point
     longjmp(myerr->setjmp_buffer, 1);
 }
-#endif // JPEG_SUPPORT
 
 
-Image* LoadJPEGImage(const string& filename, int /*unused*/)
+Image* LoadJPEGImage(const fs::path& filename, int /*unused*/)
 {
-#ifdef JPEG_SUPPORT
     Image* img = nullptr;
 
     // This struct contains the JPEG decompression parameters and pointers to
@@ -445,7 +387,11 @@ Image* LoadJPEGImage(const string& filename, int /*unused*/)
     // requires it in order to read binary files.
 
     FILE *in;
+#ifdef _WIN32
+    in = _wfopen(filename.c_str(), L"rb");
+#else
     in = fopen(filename.c_str(), "rb");
+#endif
     if (!in)
         return nullptr;
 
@@ -549,103 +495,32 @@ Image* LoadJPEGImage(const string& filename, int /*unused*/)
     // warnings occurred (test whether jerr.pub.num_warnings is nonzero).
 
     return img;
-
-#elif defined(TARGET_OS_MAC)
-
-    Image* img = nullptr;
-    CGBuffer* cgJpegImage;
-    size_t img_w, img_h, img_d;
-
-    cgJpegImage = new CGBuffer(filename.c_str());
-    if (cgJpegImage == nullptr) {
-        char tempcwd[2048];
-        getcwd(tempcwd, sizeof(tempcwd));
-        DPRINTF(0, "CGBuffer :: Error opening JPEG image file %s/%s\n", tempcwd, filename.c_str());
-        delete cgJpegImage;
-        return nullptr;
-    }
-
-    if (!cgJpegImage->LoadJPEG()) {
-        char tempcwd[2048];
-        getcwd(tempcwd, sizeof(tempcwd));
-        DPRINTF(0, "CGBuffer :: Error loading JPEG image file %s/%s\n", tempcwd, filename.c_str());
-        delete cgJpegImage;
-        return nullptr;
-    }
-
-    cgJpegImage->Render();
-
-    img_w = (size_t) cgJpegImage->image_size.width;
-    img_h = (size_t) cgJpegImage->image_size.height;
-    img_d = (size_t) ((cgJpegImage->image_depth == 8) ? 1 : 4);
-
-    // DPRINTF(0,"cgJpegImage :: %d x %d x %d [%d] bpp\n", img_w, img_h, (size_t)cgJpegImage->image_depth, img_d);
-
-#ifdef MACOSX_ALPHA_JPEGS
-    int format = (img_d == 1) ? GL_LUMINANCE : GL_RGBA;
-#else
-    int format = (img_d == 1) ? GL_LUMINANCE : GL_RGB;
-#endif
-    img = new Image(format, img_w, img_h);
-    if (img == nullptr || img->getPixels() == nullptr) {
-        DPRINTF(0, "Could not create image\n");
-        delete cgJpegImage;
-        return nullptr;
-    }
-    // following code flips image and skips alpha byte if no alpha support
-    unsigned char* bout = (unsigned char*) img->getPixels();
-    unsigned char* bin  = (unsigned char*) cgJpegImage->buffer->data;
-    unsigned int bcount = img_w * img_h * img_d;
-    unsigned int i = 0;
-    bin += bcount+(img_w*img_d); // start one row past end
-    for (i=0; i<bcount; ++i)
-    {
-         // at end of row, move back two rows
-        if ( (i % (img_w * img_d)) == 0 ) bin -= 2*(img_w * img_d);
-
-#ifndef MACOSX_ALPHA_JPEGS
-        if (( (img_d != 1) && !((i&3)^3) )) // skip extra byte
-        {
-            ++bin;
-        } else
-#endif // !MACOSX_ALPHA_JPEGS
-
-        *bout++ = *bin++;
-    }
-    delete cgJpegImage;
-    return img;
-
-#else
-    return nullptr;
-#endif // JPEG_SUPPORT
 }
 
 
-#ifdef PNG_SUPPORT
 void PNGReadData(png_structp png_ptr, png_bytep data, png_size_t length)
 {
     auto* fp = (FILE*) png_get_io_ptr(png_ptr);
     if (fread((void*) data, 1, length, fp) != length)
         cerr << "Error reading PNG data";
 }
-#endif
 
 
-Image* LoadPNGImage(const string& filename)
+Image* LoadPNGImage(const fs::path& filename)
 {
-#ifndef PNG_SUPPORT
-    return nullptr;
-#else
     char header[8];
     png_structp png_ptr;
     png_infop info_ptr;
     png_uint_32 width, height;
     int bit_depth, color_type, interlace_type;
-    FILE* fp = nullptr;
     Image* img = nullptr;
     png_bytep* row_pointers = nullptr;
 
-    fp = fopen(filename.c_str(), "rb");
+#ifdef _WIN32
+    FILE *fp = _wfopen(filename.c_str(), L"rb");
+#else
+    FILE *fp = fopen(filename.c_str(), "rb");
+#endif
     if (fp == nullptr)
     {
         fmt::fprintf(clog, _("Error opening image file %s\n"), filename);
@@ -757,7 +632,6 @@ Image* LoadPNGImage(const string& filename)
     fclose(fp);
 
     return img;
-#endif
 }
 
 
@@ -912,9 +786,9 @@ static Image* LoadBMPImage(ifstream& in)
 }
 
 
-Image* LoadBMPImage(const string& filename)
+Image* LoadBMPImage(const fs::path& filename)
 {
-    ifstream bmpFile(filename, ios::in | ios::binary);
+    ifstream bmpFile(filename.string(), ios::in | ios::binary);
 
     if (bmpFile.good())
     {

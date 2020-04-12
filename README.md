@@ -3,13 +3,16 @@
 |[![GitHub release](https://img.shields.io/badge/Release-v1.6.1-blue.svg)](https://celestiaproject.net/download.html) | [![Localization](https://img.shields.io/badge/Localized-85%25-green.svg)](#) | [![License](https://img.shields.io/badge/License-GPLv2-blue.svg)](https://github.com/CelestiaProject/Celestia/blob/master/COPYING) | [![Contribute](https://img.shields.io/badge/PRs-Welcome-brightgreen.svg)](#contributing) |
 
 # Celestia
-![Celestia](https://celestiaproject.net/img/albums/2017/04/20/9a57d8f21a129049a6b0e1da3a5c852d.png)  
-**A real-time space simulation that lets you experience our universe in three dimensions.**  
+![Celestia](celestia-logo.png)<br>
+**A real-time space simulation that lets you experience our universe in three dimensions.**
 
-**Copyright (c) 2001-2017, Celestia Development Team**  
-**Celestia web site: https://celestia.space**  
-**Celestia WikiBook: https://en.wikibooks.org/wiki/Celestia**  
-**Celestia forums: http://celestia.space/forum/**  
+**Copyright © 2001-2020, Celestia Development Team**<br>
+**Celestia website: https://celestia.space**<br>
+**Celestia WikiBook: https://en.wikibooks.org/wiki/Celestia**<br>
+**Celestia forums: https://celestia.space/forum/**<br>
+**Celestia Discord Server: https://discordapp.com/invite/WEWDcJh**<br>
+**Celestia SubReddit: https://www.reddit.com/r/Celestiasoftware/**<br>
+**Celestia Archive Repository: https://github.com/Anthony-B-Russo10/Celestia-Archive**
 ## License
 
 This program is free software; you can redistribute it and/or modify it under
@@ -20,10 +23,10 @@ This program is distributed in the hope that it will be useful, but WITHOUT
 ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
 FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details,
 which you should have received along with this program (filename: COPYING).
-If not, request a copy from:
-Free Software Foundation, Inc.
-59 Temple Place - Suite 330
-Boston, MA  02111-1307
+If not, request a copy from:<br>
+Free Software Foundation, Inc.<br>
+59 Temple Place - Suite 330<br>
+Boston, MA  02111-1307<br>
 USA
 
 ## Getting started
@@ -62,8 +65,8 @@ button, and you're off.
 
 That covers the very basics.  For a more in-depth look at Celestia and the
 controls available to you, download the "Celestia User's Guide" (written by 
-Frank Gregorio), available in several languages, from:
-  https://celestia.space/guides.html
+Frank Gregorio), available in several languages, from:<br>
+  https://celestia.space/guides.html<br>
 This web page also includes links to the Celestia README file translated into
 Japanese.
 
@@ -117,20 +120,24 @@ types of catalog files:
 * ssc (solar system catalog: planets, moons, spacecraft, etc.)
 * stc (star catalog)
 * dsc (deep sky catalog: galaxies, star clusters, and nebulae)
+
 All three types of catalog file are text files that can be updated with your
 favorite text editing program.
+
+### Building from sources
+See instructions in file [INSTALL.md](INSTALL.md).
 
 ## Contributions
 | **`Authors`** | **`Contributors`** | **`Documentation`** | **`Other`** |
 |-----------------|---------------------|------------------|-------------------|
-| Chris Laurel, Clint Weisbrod, Fridger Schrempp, Bob Ippolito, Christophe Teyssier, Hank Ramsey, Grant Hutchison, Pat Suwalski, Toti , Da Woon Jung, Vincent Giangiulio, Andrew Tribick | Deon Ramsey, Christopher ANDRE, Colin Walters, Peter Chapman, James Holmes, Harald Schmidt, Sergey Leonov, Alexell, Dmitry Brant, Janus, Pirogronian, Hleb Valoshka | Frank Gregorio, Hitoshi Suzuki, Christophe Teyssier, Diego Rodriguez, Don Goyette, Harald Schmidt | Creators of scientific data base, texture maps, 3D models and used librarys, you can see in full README.|
+| Chris Laurel, Clint Weisbrod, Fridger Schrempp, Bob Ippolito, Christophe Teyssier, Hank Ramsey, Grant Hutchison, Pat Suwalski, Toti, Da Woon Jung, Vincent Giangiulio, Andrew Tribick, Hleb Valoshka, Łukasz Buczyński, Li Linfeng | Deon Ramsey, Christopher Andre, Colin Walters, Peter Chapman, James Holmes, Harald Schmidt, Nils Larsson, Sergey Leonov, Alexell, Dmitry Brant, Janus | Selden Ball, Frank Gregorio, Hitoshi Suzuki, Christophe Teyssier, Diego Rodriguez, Don Goyette, Harald Schmidt | Creators of scientific database, texture maps, 3D models and used libraries, you can see in full README.|
 
 ### Contributing
 
 **We welcome feedback, bug reports, and pull requests!**  
 
 For pull requests, please stick to the following guidelines:
-* Be sure to test your any code changes.
+* Be sure to test your code changes.
 * Follow the existing code style (e.g., indents).
-* Put a of comments into the code, if necessary.
+* Put a lot of comments into the code, if necessary.
 * Separate unrelated changes into multiple pull requests.

@@ -27,6 +27,7 @@ static const double ANGULAR_RES = 3.5e-6;
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 
 Universe::Universe()
@@ -100,7 +101,7 @@ SolarSystem* Universe::getSolarSystem(const Star* star) const
     if (star == nullptr)
         return nullptr;
 
-    uint32_t starNum = star->getCatalogNumber();
+    auto starNum = star->getIndex();
     auto iter = solarSystemCatalog->find(starNum);
     if (iter != solarSystemCatalog->end())
         return iter->second;
@@ -151,7 +152,7 @@ SolarSystem* Universe::createSolarSystem(Star* star) const
 
     solarSystem = new SolarSystem(star);
     solarSystemCatalog->insert(SolarSystemCatalog::
-                               value_type(star->getCatalogNumber(),
+                               value_type(star->getIndex(),
                                           solarSystem));
 
     return solarSystem;
@@ -423,7 +424,7 @@ static bool traverseFrameTree(FrameTree* frameTree,
 {
     for (unsigned int i = 0; i < frameTree->childCount(); i++)
     {
-        TimelinePhase* phase = frameTree->getChild(i);
+        auto phase = frameTree->getChild(i);
         if (phase->includes(tdb))
         {
             Body* body = phase->body();
@@ -1010,14 +1011,20 @@ Selection Universe::find(const string& s,
 {
     if (starCatalog != nullptr)
     {
-    Star* star = starCatalog->find(s);
-    if (star != nullptr)
-        return Selection(star);
+        Star* star = starCatalog->find(s);
+        if (star != nullptr)
+            return Selection(star);
+        star = starCatalog->find(ReplaceGreekLetterAbbr(s));
+        if (star != nullptr)
+            return Selection(star);
     }
 
     if (dsoCatalog != nullptr)
     {
         DeepSkyObject* dso = dsoCatalog->find(s);
+        if (dso != nullptr)
+            return Selection(dso);
+        dso = dsoCatalog->find(ReplaceGreekLetterAbbr(s));
         if (dso != nullptr)
             return Selection(dso);
     }

@@ -1,8 +1,12 @@
 set(CELENGINE_SOURCES
   asterism.cpp
   asterism.h
+  asterismrenderer.cpp
+  asterismrenderer.h
   astro.cpp
   astro.h
+  astroobj.h
+  astroobj.cpp
   atmosphere.h
   axisarrow.cpp
   axisarrow.h
@@ -10,17 +14,12 @@ set(CELENGINE_SOURCES
   body.h
   boundaries.cpp
   boundaries.h
+  boundariesrenderer.cpp
+  boundariesrenderer.h
   catalogxref.cpp
   catalogxref.h
   category.cpp
   category.h
-  catentry.cpp
-  catentry.h
-  celestia.h
-  cmdparser.cpp
-  cmdparser.h
-  command.cpp
-  command.h
   console.cpp
   console.h
   constellation.cpp
@@ -38,22 +37,27 @@ set(CELENGINE_SOURCES
   dsoname.h
   dsooctree.cpp
   dsooctree.h
-  execenv.h
-  execution.cpp
-  execution.h
   frame.cpp
   frame.h
+  framebuffer.cpp
+  framebuffer.h
   frametree.cpp
   frametree.h
   galaxy.cpp
   galaxy.h
   geometry.h
-  glcontext.cpp
-  glcontext.h
+  #glcontext.cpp
+  #glcontext.h
+  glmarker.cpp
   globular.cpp
   globular.h
   glshader.cpp
   glshader.h
+  glsupport.cpp
+  glsupport.h
+  hash.cpp
+  hash.h
+  #hdrfuncrender.cpp
   image.cpp
   image.h
   lightenv.h
@@ -73,13 +77,17 @@ set(CELENGINE_SOURCES
   name.h
   nebula.cpp
   nebula.h
+  objectrenderer.h
   observer.cpp
   observer.h
   octree.h
   opencluster.cpp
   opencluster.h
+  orbitsampler.h
   overlay.cpp
   overlay.h
+  overlayimage.cpp
+  overlayimage.h
   parseobject.cpp
   parseobject.h
   parser.cpp
@@ -90,20 +98,27 @@ set(CELENGINE_SOURCES
 #  particlesystem.h
   planetgrid.cpp
   planetgrid.h
+  pointstarrenderer.cpp
+  pointstarrenderer.h
+  pointstarvertexbuffer.cpp
+  pointstarvertexbuffer.h
+  rectangle.h
   referencemark.h
   rendcontext.cpp
   rendcontext.h
   render.cpp
+  render.h
   renderglsl.cpp
   renderglsl.h
-  render.h
   renderinfo.h
+  renderlistentry.h
   rotationmanager.cpp
   rotationmanager.h
   selection.cpp
   selection.h
   shadermanager.cpp
   shadermanager.h
+  shared.h
   simulation.cpp
   simulation.h
   skygrid.cpp
@@ -143,19 +158,20 @@ set(CELENGINE_SOURCES
   univcoord.h
   universe.cpp
   universe.h
+  value.cpp
+  value.h
   vecgl.h
+  vertexobject.cpp
+  vertexobject.h
   virtualtex.cpp
   virtualtex.h
   visibleregion.cpp
   visibleregion.h
 )
 
-if(APPLE)
-  list(APPEND CELENGINE_SOURCES CGBuffer.h)
-endif()
+# The object files in the celephem directory are merged in the celengine library
+add_library(celengine STATIC ${CELENGINE_SOURCES} $<TARGET_OBJECTS:celephem>)
 
-add_library(celengine STATIC ${CELENGINE_SOURCES})
-cotire(celengine)
 #[[
 add_library(celengine SHARED ${CELENGINE_SOURCES})
 set_target_properties(celengine PROPERTIES
@@ -163,6 +179,23 @@ set_target_properties(celengine PROPERTIES
   SOVERSION ${VERSION}
 )
 ]]#
-add_dependencies(celengine cel3ds celmath celmodel)
-target_link_libraries(celengine cel3ds celmath celmodel)
+
+add_dependencies(celengine cel3ds celmath celmodel celutil)
+target_link_libraries(celengine cel3ds celmath celmodel celutil)
+
+if (ENABLE_TTF)
+  add_dependencies(celengine celttf)
+  target_link_libraries(celengine celttf)
+else()
+  add_dependencies(celengine celtxf)
+  target_link_libraries(celengine celtxf)
+endif()
+
+# Some celephem objects depend on Spice
+if(ENABLE_SPICE)
+  target_link_libraries(celengine CSPICE::CSPICE)
+endif()
+
+cotire(celengine)
+
 #install(TARGETS celengine LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})

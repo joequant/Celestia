@@ -11,7 +11,7 @@
 #include <cassert>
 #include <algorithm>
 #include <celmath/mathlib.h>
-#include <celutil/util.h>
+#include <celutil/gettext.h>
 #include <celutil/utf8.h>
 #include "geometry.h"
 #include "meshmanager.h"
@@ -26,6 +26,7 @@
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 
 Body::Body(PlanetarySystem* _system, const string& _name) :
@@ -58,7 +59,7 @@ Body::~Body()
 
     if(altSurfaces)
     {
-        for (const auto s : *altSurfaces)
+        for (const auto &s : *altSurfaces)
             delete s.second;
         delete altSurfaces;
     }
@@ -88,10 +89,10 @@ void Body::setDefaultProperties()
     delete rings;
     rings = nullptr;
     classification = Unknown;
-    visible = 1;
-    clickable = 1;
-    visibleAsPoint = 1;
-    overrideOrbitColor = 0;
+    visible = true;
+    clickable = true;
+    visibleAsPoint = true;
+    overrideOrbitColor = false;
     orbitVisibility = UseClassVisibility;
     recomputeCullingRadius();
 }
@@ -160,8 +161,12 @@ void Body::setName(const string& name)
  */
 void Body::addAlias(const string& alias)
 {
-    names.push_back(alias);
-    system->addAlias(this, alias);
+    // Don't add an alias if it matches the primary name
+    if (alias != names[0])
+    {
+        names.push_back(alias);
+        system->addAlias(this, alias);
+    }
 }
 
 
@@ -216,7 +221,7 @@ void Body::markUpdated()
 }
 
 
-const ReferenceFrame* Body::getOrbitFrame(double tdb) const
+const ReferenceFrame::SharedConstPtr& Body::getOrbitFrame(double tdb) const
 {
     return timeline->findPhase(tdb)->orbitFrame();
 }
@@ -228,7 +233,7 @@ const Orbit* Body::getOrbit(double tdb) const
 }
 
 
-const ReferenceFrame* Body::getBodyFrame(double tdb) const
+const ReferenceFrame::SharedConstPtr& Body::getBodyFrame(double tdb) const
 {
     return timeline->findPhase(tdb)->bodyFrame();
 }
@@ -543,9 +548,9 @@ UniversalCoord Body::getPosition(double tdb) const
 {
     Vector3d position = Vector3d::Zero();
 
-    const TimelinePhase* phase = timeline->findPhase(tdb);
+    auto phase = timeline->findPhase(tdb);
     Vector3d p = phase->orbit()->positionAtTime(tdb);
-    ReferenceFrame* frame = phase->orbitFrame();
+    auto frame = phase->orbitFrame();
 
     while (frame->getCenter().getType() == Selection::Type_Body)
     {
@@ -568,7 +573,7 @@ UniversalCoord Body::getPosition(double tdb) const
  */
 Quaterniond Body::getOrientation(double tdb) const
 {
-    const TimelinePhase* phase = timeline->findPhase(tdb);
+    auto phase = timeline->findPhase(tdb);
     return phase->rotationModel()->orientationAtTime(tdb) * phase->bodyFrame()->getOrientation(tdb);
 }
 
@@ -577,9 +582,9 @@ Quaterniond Body::getOrientation(double tdb) const
  */
 Vector3d Body::getVelocity(double tdb) const
 {
-    const TimelinePhase* phase = timeline->findPhase(tdb);
+    auto phase = timeline->findPhase(tdb);
 
-    ReferenceFrame* orbitFrame = phase->orbitFrame();
+    auto orbitFrame = phase->orbitFrame();
 
     Vector3d v = phase->orbit()->velocityAtTime(tdb);
     v = orbitFrame->getOrientation(tdb).conjugate() * v + orbitFrame->getCenter().getVelocity(tdb);
@@ -598,11 +603,11 @@ Vector3d Body::getVelocity(double tdb) const
  */
 Vector3d Body::getAngularVelocity(double tdb) const
 {
-    const TimelinePhase* phase = timeline->findPhase(tdb);
+    auto phase = timeline->findPhase(tdb);
 
     Vector3d v = phase->rotationModel()->angularVelocityAtTime(tdb);
 
-    ReferenceFrame* bodyFrame = phase->bodyFrame();
+    auto bodyFrame = phase->bodyFrame();
     v = bodyFrame->getOrientation(tdb).conjugate() * v;
     if (!bodyFrame->isInertial())
     {
@@ -621,7 +626,7 @@ Vector3d Body::getAngularVelocity(double tdb) const
  */
 Matrix4d Body::getLocalToAstrocentric(double tdb) const
 {
-    const TimelinePhase* phase = timeline->findPhase(tdb);
+    auto phase = timeline->findPhase(tdb);
     Vector3d p = phase->orbitFrame()->convertToAstrocentric(phase->orbit()->positionAtTime(tdb), tdb);
     return Eigen::Transform<double, 3, Affine>(Translation3d(p)).matrix();
 }
@@ -632,7 +637,7 @@ Matrix4d Body::getLocalToAstrocentric(double tdb) const
 Vector3d Body::getAstrocentricPosition(double tdb) const
 {
     // TODO: Switch the iterative method used in getPosition
-    const TimelinePhase* phase = timeline->findPhase(tdb);
+    auto phase = timeline->findPhase(tdb);
     return phase->orbitFrame()->convertToAstrocentric(phase->orbit()->positionAtTime(tdb), tdb);
 }
 
@@ -641,7 +646,7 @@ Vector3d Body::getAstrocentricPosition(double tdb) const
  */
 Quaterniond Body::getEclipticToFrame(double tdb) const
 {
-    const TimelinePhase* phase = timeline->findPhase(tdb);
+    auto phase = timeline->findPhase(tdb);
     return phase->bodyFrame()->getOrientation(tdb);
 }
 
@@ -651,7 +656,7 @@ Quaterniond Body::getEclipticToFrame(double tdb) const
  */
 Quaterniond Body::getEclipticToEquatorial(double tdb) const
 {
-    const TimelinePhase* phase = timeline->findPhase(tdb);
+    auto phase = timeline->findPhase(tdb);
     return phase->rotationModel()->equatorOrientationAtTime(tdb) * phase->bodyFrame()->getOrientation(tdb);
 }
 
@@ -661,7 +666,7 @@ Quaterniond Body::getEclipticToEquatorial(double tdb) const
  */
 Quaterniond Body::getEclipticToBodyFixed(double tdb) const
 {
-    const TimelinePhase* phase = timeline->findPhase(tdb);
+    auto phase = timeline->findPhase(tdb);
     return phase->rotationModel()->orientationAtTime(tdb) * phase->bodyFrame()->getOrientation(tdb);
 }
 
@@ -671,7 +676,7 @@ Quaterniond Body::getEclipticToBodyFixed(double tdb) const
 // meridian, and z-axis at a right angle the xy plane.
 Quaterniond Body::getEquatorialToBodyFixed(double tdb) const
 {
-    const TimelinePhase* phase = timeline->findPhase(tdb);
+    auto phase = timeline->findPhase(tdb);
     return phase->rotationModel()->spin(tdb);
 }
 
@@ -1052,7 +1057,7 @@ Body::getReferenceMarks() const
  */
 void Body::setVisible(bool _visible)
 {
-    visible = _visible ? 1 : 0;
+    visible = _visible;
 }
 
 
@@ -1062,7 +1067,7 @@ void Body::setVisible(bool _visible)
  */
 void Body::setClickable(bool _clickable)
 {
-    clickable = _clickable ? 1 : 0;
+    clickable = _clickable;
 }
 
 
@@ -1073,7 +1078,7 @@ void Body::setClickable(bool _clickable)
  */
 void Body::setVisibleAsPoint(bool _visibleAsPoint)
 {
-    visibleAsPoint = _visibleAsPoint ? 1 : 0;
+    visibleAsPoint = _visibleAsPoint;
 }
 
 
@@ -1081,9 +1086,9 @@ void Body::setVisibleAsPoint(bool _visibleAsPoint)
  *  color should be used (specified via setOrbitColor) instead of the
  *  default class orbit color.
  */
-void Body::setOrbitColorOverridden(bool override)
+void Body::setOrbitColorOverridden(bool _override)
 {
-    overrideOrbitColor = override ? 1 : 0;
+    overrideOrbitColor = _override;
 }
 
 
@@ -1107,6 +1112,15 @@ void Body::setOrbitVisibility(VisibilityPolicy _orbitVisibility)
 void Body::setOrbitColor(const Color& c)
 {
     orbitColor = c;
+}
+
+
+/*! Set the comet tail color
+ *
+ */
+void Body::setCometTailColor(const Color& c)
+{
+    cometTailColor = c;
 }
 
 

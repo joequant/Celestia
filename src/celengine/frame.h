@@ -15,7 +15,7 @@
 #include <celengine/selection.h>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
-
+#include "shared.h"
 
 /*! A ReferenceFrame object has a center and set of orthogonal axes.
  *
@@ -26,11 +26,10 @@
 class ReferenceFrame
 {
  public:
+    SHARED_TYPES(ReferenceFrame)
+
     ReferenceFrame(Selection center);
     virtual ~ReferenceFrame() {};
-
-    int addRef() const;
-    int release() const;
 
     UniversalCoord convertFromUniversal(const UniversalCoord& uc, double tjd) const;
     UniversalCoord convertToUniversal(const UniversalCoord& uc, double tjd) const;
@@ -61,7 +60,6 @@ class ReferenceFrame
 
  private:
     Selection centerObject;
-    mutable int refCount;
 };
 
 
@@ -72,6 +70,8 @@ class CachingFrame : public ReferenceFrame
 {
  public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
+    SHARED_TYPES(CachingFrame)
 
     CachingFrame(Selection _center);
     virtual ~CachingFrame() {};
@@ -94,6 +94,8 @@ class CachingFrame : public ReferenceFrame
 class J2000EclipticFrame : public ReferenceFrame
 {
  public:
+    SHARED_TYPES(J2000EclipticFrame)
+
     J2000EclipticFrame(Selection center);
     virtual ~J2000EclipticFrame() {};
 
@@ -114,6 +116,8 @@ class J2000EclipticFrame : public ReferenceFrame
 class J2000EquatorFrame : public ReferenceFrame
 {
  public:
+    SHARED_TYPES(J2000EquatorFrame)
+
     J2000EquatorFrame(Selection center);
     virtual ~J2000EquatorFrame() {};
     Eigen::Quaterniond getOrientation(double tjd) const;
@@ -133,6 +137,8 @@ class J2000EquatorFrame : public ReferenceFrame
 class BodyFixedFrame : public ReferenceFrame
 {
  public:
+    SHARED_TYPES(BodyFixedFrame)
+
     BodyFixedFrame(Selection center, Selection obj);
     virtual ~BodyFixedFrame() {};
     Eigen::Quaterniond getOrientation(double tjd) const;
@@ -150,6 +156,8 @@ class BodyFixedFrame : public ReferenceFrame
 class BodyMeanEquatorFrame : public ReferenceFrame
 {
  public:
+    SHARED_TYPES(BodyMeanEquatorFrame)
+
     BodyMeanEquatorFrame(Selection center, Selection obj, double freeze);
     BodyMeanEquatorFrame(Selection center, Selection obj);
     virtual ~BodyMeanEquatorFrame() {};
@@ -175,7 +183,7 @@ class FrameVector
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
     FrameVector(const FrameVector& fv);
-    ~FrameVector();
+    ~FrameVector() = default;
     FrameVector& operator=(const FrameVector&);
 
     Eigen::Vector3d direction(double tjd) const;
@@ -199,7 +207,7 @@ class FrameVector
     static FrameVector createRelativeVelocityVector(const Selection& _observer,
                                                     const Selection& _target);
     static FrameVector createConstantVector(const Eigen::Vector3d& _vec,
-                                            const ReferenceFrame* _frame);
+                                            const ReferenceFrame::SharedConstPtr& _frame);
 
  private:
     /*! Type-only constructor is private. Code outside the class should
@@ -211,7 +219,7 @@ class FrameVector
     Selection observer;
     Selection target;
     Eigen::Vector3d vec;                   // constant vector
-    const ReferenceFrame* frame; // frame for constant vector
+    ReferenceFrame::SharedConstPtr frame; // frame for constant vector
 };
 
 

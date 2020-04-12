@@ -9,16 +9,30 @@
 
 #include <cstring>
 #include <cstdarg>
+#include <iostream>
+#include "glsupport.h"
+#include <Eigen/Core>
+#include <celutil/debug.h>
 #include <celutil/utf8.h>
-#include <GL/glew.h>
+#include <celmath/geomutil.h>
 #include "vecgl.h"
 #include "overlay.h"
+#include "rectangle.h"
+#include "render.h"
+#include "texture.h"
+#if NO_TTF
+#include <celtxf/texturefont.h>
+#else
+#include <celttf/truetypefont.h>
+#endif
 
 using namespace std;
+using namespace Eigen;
+using namespace celmath;
 
-
-Overlay::Overlay() :
-    ostream(&sbuf)
+Overlay::Overlay(Renderer& r) :
+    ostream(&sbuf),
+    renderer(r)
 {
     sbuf.setOverlay(this);
 }
@@ -27,15 +41,12 @@ void Overlay::begin()
 {
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
-    glLoadIdentity();
-    gluOrtho2D(0, windowWidth, 0, windowHeight);
+    glLoadMatrix(Ortho2D(0.0f, (float)windowWidth, 0.0f, (float)windowHeight));
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();
     glLoadIdentity();
     glTranslatef(0.125f, 0.125f, 0);
 
-    glDisable(GL_LIGHTING);
-    glDisable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
@@ -71,6 +82,12 @@ void Overlay::beginText()
 {
     glPushMatrix();
     textBlock++;
+    if (font != nullptr)
+    {
+        font->bind();
+        useTexture = true;
+        fontChanged = false;
+    }
 }
 
 void Overlay::endText()
@@ -81,6 +98,7 @@ void Overlay::endText()
         xoffset = 0.0f;
         glPopMatrix();
     }
+    font->unbind();
 }
 
 
@@ -90,7 +108,6 @@ void Overlay::print(wchar_t c)
     {
         if (!useTexture || fontChanged)
         {
-            glEnable(GL_TEXTURE_2D);
             font->bind();
             useTexture = true;
             fontChanged = false;
@@ -122,7 +139,6 @@ void Overlay::print(char c)
     {
         if (!useTexture || fontChanged)
         {
-            glEnable(GL_TEXTURE_2D);
             font->bind();
             useTexture = true;
             fontChanged = false;
@@ -161,29 +177,41 @@ void Overlay::print(const char* s)
     }
 }
 
-void Overlay::rect(float x, float y, float w, float h, bool fill)
+void Overlay::drawRectangle(const Rect& r)
 {
-    if (useTexture)
+    if (useTexture && r.tex == nullptr)
     {
-        glDisable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, 0);
         useTexture = false;
     }
 
-    if (fill)
-    {
-        glRectf(x, y, x + w, y + h);
-    }
-    else
-    {
-        glBegin(GL_LINE_LOOP);
-        glVertex3f(x, y, 0);
-        glVertex3f(x + w, y, 0);
-        glVertex3f(x + w, y + h, 0);
-        glVertex3f(x, y + h, 0);
-        glEnd();
-    }
+    renderer.drawRectangle(r);
 }
 
+void Overlay::setColor(float r, float g, float b, float a)
+{
+    glColor4f(r, g, b, a);
+}
+
+void Overlay::setColor(const Color& c)
+{
+    glColor4f(c.red(), c.green(), c.blue(), c.alpha());
+}
+
+void Overlay::moveBy(float dx, float dy, float dz)
+{
+    glTranslatef(dx, dy, dz);
+}
+
+void Overlay::savePos()
+{
+    glPushMatrix();
+}
+
+void Overlay::restorePos()
+{
+    glPopMatrix();
+}
 
 //
 // OverlayStreamBuf implementation

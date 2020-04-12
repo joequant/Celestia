@@ -8,9 +8,23 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include <QtGui>
 #include "mainwindow.h"
-
+#include <QComboBox>
+#include <QFontComboBox>
+#include <QScrollArea>
+#include <QLabel>
+#include <QFont>
+#include <QDataStream>
+#include <QDebug>
+#include <QMessageBox>
+#include <QFile>
+#include <QAction>
+#include <QMenuBar>
+#include <QMenu>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
+#include <QFileDialog>
+#include <QPainter>
 
 // TXF format constants
 const char* TXF_HEADER_BYTES = "\377txf";
@@ -289,7 +303,7 @@ MainWindow::buildTxf(const QFont& font, QDataStream& out, int texWidth, int texH
 
     // Sort the glyphs by height so that they pack more compactly
     // into the available space.
-    qSort(glyphInfoList);
+    std::sort(glyphInfoList.begin(), glyphInfoList.end());
 
     if (glyphInfoList.isEmpty())
     {
@@ -347,7 +361,11 @@ MainWindow::buildTxf(const QFont& font, QDataStream& out, int texWidth, int texH
         out << (quint16) info.ch.unicode();
         out << (quint8) (bounds.width() + 2) << (quint8) (bounds.height() + 2);
         out << (qint8) bounds.left() << (qint8) (-bounds.bottom());
+#if QT_VERSION >= QT_VERSION_CHECK(5, 11, 0)
+        out << (qint8) fm.horizontalAdvance(info.ch);
+#else
         out << (qint8) fm.width(info.ch);
+#endif
         out << (quint8) 0;   /* unused */
         out << (quint16) (x - 1) << (quint16) (texHeight - y - 2);
 

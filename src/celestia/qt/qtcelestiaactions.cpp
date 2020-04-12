@@ -12,7 +12,8 @@
 
 #include <QAction>
 #include <QMenu>
-#include "celestia/celestiacore.h"
+#include <celestia/celestiacore.h>
+#include <celutil/gettext.h>
 #include "qtcelestiaactions.h"
 
 
@@ -212,12 +213,6 @@ CelestiaActions::CelestiaActions(QObject* parent,
     lightTimeDelayAction->setToolTip("Subtract one-way light travel time to selected object");
     connect(lightTimeDelayAction, SIGNAL(triggered()), this, SLOT(slotSetLightTimeDelay()));
 
-    toggleVSyncAction    = createCheckableAction(_("Enable Vsync"), 0);
-//    toggleVSyncAction->setShortcut(QKeySequence("Ctrl+Y"));
-    toggleVSyncAction->setToolTip(_("Faintest visible magnitude based on field of view"));
-    connect(toggleVSyncAction,    SIGNAL(triggered()), this, SLOT(slotToggleVsync()));
-
-
     syncWithRenderer(appCore->getRenderer());
     syncWithAppCore();
     appCore->getRenderer()->addWatcher(this);
@@ -376,6 +371,15 @@ void CelestiaActions::slotAdjustLimitingMagnitude()
     QAction* act = qobject_cast<QAction*>(sender());
     if (act != nullptr)
     {
+        // HACK!HACK!HACK!
+        // Consider removal relevant entries from menus.
+        // If search console is open then pass keys to it.
+        if (appCore->getTextEnterMode() != CelestiaCore::KbNormal)
+        {
+            appCore->charEntered(act->shortcut().toString().toUtf8().data());
+            return;
+        }
+
         Renderer* renderer = appCore->getRenderer();
         float change = (float) act->data().toDouble();
 
@@ -408,10 +412,6 @@ void CelestiaActions::slotSetLightTimeDelay()
     appCore->charEntered('-');
 }
 
-void CelestiaActions::slotToggleVsync()
-{
-     appCore->getRenderer()->setVideoSync(!appCore->getRenderer()->getVideoSync());
-}
 
 // Convenience method to create a checkable action for a menu and set the data
 // to the specified integer value.

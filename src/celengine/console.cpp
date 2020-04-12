@@ -11,13 +11,20 @@
 #include <cstdarg>
 #include <cassert>
 #include <algorithm>
-#include "celutil/utf8.h"
-#include <GL/glew.h>
+#include <iostream>
+#include <celutil/utf8.h>
+#include <celmath/geomutil.h>
+#include "glsupport.h"
 #include "vecgl.h"
 #include "console.h"
+#if NO_TTF
+#include <celtxf/texturefont.h>
+#else
+#include <celttf/truetypefont.h>
+#endif
 
 using namespace std;
-
+using namespace celmath;
 
 static int pmod(int n, int m)
 {
@@ -74,15 +81,12 @@ void Console::begin()
 {
     glMatrixMode(GL_PROJECTION);
     glPushMatrix();
-    glLoadIdentity();
-    gluOrtho2D(0, xscale, 0, yscale);
+    glLoadMatrix(Ortho2D(0.0f, (float)xscale, 0.0f, (float)yscale));
     glMatrixMode(GL_MODELVIEW);
     glPushMatrix();
     glLoadIdentity();
     glTranslatef(0.125f, 0.125f, 0);
 
-    glDisable(GL_LIGHTING);
-    glDisable(GL_TEXTURE_2D);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
@@ -94,6 +98,7 @@ void Console::end()
     glPopMatrix();
     glMatrixMode(GL_MODELVIEW);
     glPopMatrix();
+    font->unbind();
 }
 
 
@@ -102,7 +107,6 @@ void Console::render(int rowHeight)
     if (font == nullptr)
         return;
 
-    glEnable(GL_TEXTURE_2D);
     font->bind();
     glPushMatrix();
     for (int i = 0; i < rowHeight; i++)
@@ -225,6 +229,24 @@ int Console::getWidth() const
 int Console::getHeight() const
 {
     return nRows;
+}
+
+
+void Console::setColor(float r, float g, float b, float a) const
+{
+    glColor4f(r, g, b, a);
+}
+
+
+void Console::setColor(const Color& c) const
+{
+    glColor4f(c.red(), c.green(), c.blue(), c.alpha());
+}
+
+
+void Console::moveBy(float dx, float dy, float dz) const
+{
+    glTranslatef(dx, dy, dz);
 }
 
 

@@ -10,22 +10,21 @@
 #include <cassert>
 #include <cstring>
 #include <fstream>
-
-#ifndef _WIN32
-#ifndef TARGET_OS_MAC
 #include <config.h>
-#endif /* TARGET_OS_MAC */
-#endif /* _WIN32 */
-
 #include <celutil/debug.h>
 #include <celutil/bytes.h>
 #include <celutil/utf8.h>
 #include <celutil/util.h>
-#include <GL/glew.h>
+#include <celengine/glsupport.h>
+#include <celengine/render.h>
 #include "texturefont.h"
 
 using namespace std;
 
+TextureFont::TextureFont(const Renderer *r) :
+    renderer(r)
+{
+}
 
 TextureFont::~TextureFont()
 {
@@ -197,10 +196,25 @@ int TextureFont::getTextureName() const
 
 void TextureFont::bind()
 {
+    auto *prog = renderer->getShaderManager().getShader("text");
+    if (prog == nullptr)
+        return;
+
     if (texName != 0)
+    {
+        glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, texName);
+        prog->use();
+        prog->samplerParam("atlasTex") = 0;
+    }
 }
 
+void TextureFont::unbind()
+{
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+}
 
 void TextureFont::addGlyph(const TextureFont::Glyph& g)
 {
@@ -228,7 +242,7 @@ bool TextureFont::buildTexture()
     glGenTextures(1, (GLuint*) &texName);
     if (texName == 0)
     {
-        DPRINTF(0, "Failed to allocate texture object for font.\n");
+        DPRINTF(LOG_LEVEL_ERROR, "Failed to allocate texture object for font.\n");
         return false;
     }
 
@@ -264,7 +278,7 @@ void TextureFont::rebuildGlyphLookupTable()
     // If there was already a lookup table, delete it.
     delete[] glyphLookup;
 
-    DPRINTF(1, "texturefont: allocating glyph lookup table with %d entries.\n",
+    DPRINTF(LOG_LEVEL_INFO, "texturefont: allocating glyph lookup table with %d entries.\n",
             maxID + 1);
     glyphLookup = new const Glyph*[maxID + 1];
     for (int i = 0; i <= maxID; i++)
@@ -321,14 +335,14 @@ static int8_t readInt8(istream& in)
 }
 
 
-TextureFont* TextureFont::load(istream& in)
+TextureFont* TextureFont::load(const Renderer *r, istream& in)
 {
     char header[4];
 
     in.read(header, sizeof header);
     if (!in.good() || strncmp(header, "\377txf", 4) != 0)
     {
-        DPRINTF(0, "Stream is not a texture font!.\n");
+        DPRINTF(LOG_LEVEL_ERROR, "Stream is not a texture font!.\n");
         return nullptr;
     }
 
@@ -336,7 +350,7 @@ TextureFont* TextureFont::load(istream& in)
     in.read(reinterpret_cast<char*>(&endiannessTest), sizeof endiannessTest);
     if (!in.good())
     {
-        DPRINTF(0, "Error reading endianness bytes in txf header.\n");
+        DPRINTF(LOG_LEVEL_ERROR, "Error reading endianness bytes in txf header.\n");
         return nullptr;
     }
 
@@ -347,7 +361,7 @@ TextureFont* TextureFont::load(istream& in)
         byteSwap = false;
     else
     {
-        DPRINTF(0, "Stream is not a texture font!.\n");
+        DPRINTF(LOG_LEVEL_ERROR, "Stream is not a texture font!.\n");
         return nullptr;
     }
 
@@ -360,13 +374,13 @@ TextureFont* TextureFont::load(istream& in)
 
     if (!in)
     {
-        DPRINTF(0, "Texture font stream is incomplete");
+        DPRINTF(LOG_LEVEL_ERROR, "Texture font stream is incomplete");
         return nullptr;
     }
 
-    DPRINTF(1, "Font contains %d glyphs.\n", nGlyphs);
+    DPRINTF(LOG_LEVEL_INFO, "Font contains %d glyphs.\n", nGlyphs);
 
-    auto* font = new TextureFont();
+    auto* font = new TextureFont(r);
     assert(font != nullptr);
 
     font->setMaxAscent(maxAscent);
@@ -391,7 +405,7 @@ TextureFont* TextureFont::load(istream& in)
 
         if (!in)
         {
-            DPRINTF(0, "Error reading glyph %ud from texture font stream.\n", i);
+            DPRINTF(LOG_LEVEL_ERROR, "Error reading glyph %ud from texture font stream.\n", i);
             delete font;
             return nullptr;
         }
@@ -416,12 +430,12 @@ TextureFont* TextureFont::load(istream& in)
     {
         auto* fontImage = new unsigned char[texWidth * texHeight];
 
-        DPRINTF(1, "Reading %d x %d 8-bit font image.\n", texWidth, texHeight);
+        DPRINTF(LOG_LEVEL_INFO, "Reading %d x %d 8-bit font image.\n", texWidth, texHeight);
 
         in.read(reinterpret_cast<char*>(fontImage), texWidth * texHeight);
         if (in.gcount() != (signed)(texWidth * texHeight))
         {
-            DPRINTF(0, "Missing bitmap data in font stream.\n");
+            DPRINTF(LOG_LEVEL_ERROR, "Missing bitmap data in font stream.\n");
             delete font;
             delete[] fontImage;
             return nullptr;
@@ -435,12 +449,12 @@ TextureFont* TextureFont::load(istream& in)
         auto* fontBits = new unsigned char[rowBytes * texHeight];
         auto* fontImage = new unsigned char[texWidth * texHeight];
 
-        DPRINTF(1, "Reading %d x %d 1-bit font image.\n", texWidth, texHeight);
+        DPRINTF(LOG_LEVEL_INFO, "Reading %d x %d 1-bit font image.\n", texWidth, texHeight);
 
         in.read(reinterpret_cast<char*>(fontBits), rowBytes * texHeight);
         if (in.gcount() != (signed)(rowBytes * texHeight))
         {
-            DPRINTF(0, "Missing bitmap data in font stream.\n");
+            DPRINTF(LOG_LEVEL_ERROR, "Missing bitmap data in font stream.\n");
             delete font;
             delete[] fontImage;
             delete[] fontBits;
@@ -468,15 +482,15 @@ TextureFont* TextureFont::load(istream& in)
 }
 
 
-TextureFont* LoadTextureFont(const string& filename)
+TextureFont* LoadTextureFont(const Renderer *r, const fs::path& filename)
 {
-    string localeFilename = LocaleFilename(filename);
-    ifstream in(localeFilename, ios::in | ios::binary);
+    fs::path localeFilename = LocaleFilename(filename);
+    ifstream in(localeFilename.string(), ios::in | ios::binary);
     if (!in.good())
     {
-        DPRINTF(0, "Could not open font file %s\n", filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "Could not open font file %s\n", filename);
         return nullptr;
     }
 
-    return TextureFont::load(in);
+    return TextureFont::load(r, in);
 }

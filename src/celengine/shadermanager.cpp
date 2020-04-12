@@ -8,24 +8,33 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
-#include "celutil/util.h"
-#include "shadermanager.h"
-#include <GL/glew.h>
+#include <cassert>
 #include <cmath>
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <iomanip>
-#include <fmt/printf.h>
-#include <cassert>
 #include <Eigen/Geometry>
+#include <celcompat/filesystem.h>
+#include <celmath/geomutil.h>
+#include <celutil/debug.h>
+#include "glsupport.h"
+#include "vecgl.h"
+#include "shadermanager.h"
 
+using namespace celestia;
 using namespace Eigen;
 using namespace std;
 
 // GLSL on Mac OS X appears to have a bug that precludes us from using structs
-// #define USE_GLSL_STRUCTS
+#define USE_GLSL_STRUCTS
 #define POINT_FADE 0
+
+#ifndef GL_ONLY_SHADOWS
+#define GL_ONLY_SHADOWS 1
+#endif
+
+constexpr const int ShadowSampleKernelWidth = 2;
 
 enum ShaderVariableType
 {
@@ -33,6 +42,7 @@ enum ShaderVariableType
     Shader_Vector2,
     Shader_Vector3,
     Shader_Vector4,
+    Shader_Matrix4,
     Shader_Sampler1D,
     Shader_Sampler2D,
     Shader_Sampler3D,
@@ -52,16 +62,6 @@ static const char* errorFragmentShaderSource =
 
 
 static const char* CommonHeader = "#version 120\n";
-
-
-ShaderProperties::ShaderProperties() :
-    nLights(0),
-    texUsage(0),
-    lightModel(DiffuseModel),
-    shadowCounts(0),
-    effects(0)
-{
-}
 
 
 bool
@@ -171,6 +171,12 @@ ShaderProperties::hasCloudShadows() const
 }
 
 
+bool
+ShaderProperties::hasShadowMap() const
+{
+    return (texUsage & ShadowMapTexture) != 0;
+}
+
 void
 ShaderProperties::setCloudShadowForLight(unsigned int lightIndex, bool enabled)
 {
@@ -248,6 +254,11 @@ ShaderProperties::usesTangentSpaceLighting() const
 
 bool operator<(const ShaderProperties& p0, const ShaderProperties& p1)
 {
+    if (p0.simpleProps < p1.simpleProps)
+        return true;
+    if (p1.simpleProps < p0.simpleProps)
+        return false;
+
     if (p0.texUsage < p1.texUsage)
         return true;
     if (p1.texUsage < p0.texUsage)
@@ -290,19 +301,22 @@ ShaderManager::ShaderManager()
 
 ShaderManager::~ShaderManager()
 {
-    for(const auto& shader : shaders)
-    {
+    for(const auto& shader : dynamicShaders)
         delete shader.second;
-    }
 
-    shaders.clear();
+    dynamicShaders.clear();
+
+    for(const auto& shader : staticShaders)
+        delete shader.second;
+
+    staticShaders.clear();
 }
 
 CelestiaGLProgram*
 ShaderManager::getShader(const ShaderProperties& props)
 {
-    map<ShaderProperties, CelestiaGLProgram*>::iterator iter = shaders.find(props);
-    if (iter != shaders.end())
+    auto iter = dynamicShaders.find(props);
+    if (iter != dynamicShaders.end())
     {
         // Shader already exists
         return iter->second;
@@ -311,12 +325,77 @@ ShaderManager::getShader(const ShaderProperties& props)
     {
         // Create a new shader and add it to the table of created shaders
         CelestiaGLProgram* prog = buildProgram(props);
-        shaders[props] = prog;
+        dynamicShaders[props] = prog;
 
         return prog;
     }
 }
 
+CelestiaGLProgram*
+ShaderManager::getShader(const string& name, const string& vs, const string& fs)
+{
+    auto iter = staticShaders.find(name);
+    if (iter != staticShaders.end())
+    {
+        // Shader already exists
+        return iter->second;
+    }
+
+    // Create a new shader and add it to the table of created shaders
+    CelestiaGLProgram* prog = buildProgram(vs, fs);
+    staticShaders[name] = prog;
+
+    return prog;
+}
+
+CelestiaGLProgram*
+ShaderManager::getShader(const string& name)
+{
+    auto iter = staticShaders.find(name);
+    if (iter != staticShaders.end())
+    {
+        // Shader already exists
+        return iter->second;
+    }
+
+    fs::path dir("shaders");
+    auto vsName = dir / fmt::sprintf("%s_vert.glsl", name);
+    auto fsName = dir / fmt::sprintf("%s_frag.glsl", name);
+
+    std::error_code ecv, ecf;
+    uintmax_t vsSize = fs::file_size(vsName, ecv);
+    uintmax_t fsSize = fs::file_size(fsName, ecf);
+    if (ecv || ecf)
+    {
+        fmt::fprintf(cerr, "Failed to get file size of %s or %s\n", vsName, fsName);
+        return getShader(name, errorVertexShaderSource, errorFragmentShaderSource);
+    }
+
+    ifstream vsf(vsName.string());
+    if (!vsf.good())
+    {
+        fmt::fprintf(cerr, "Failed to open %s\n", vsName);
+        return getShader(name, errorVertexShaderSource, errorFragmentShaderSource);
+    }
+
+    ifstream fsf(fsName.string());
+    if (!fsf.good())
+    {
+        fmt::fprintf(cerr, "Failed to open %s\n", fsName);
+        return getShader(name, errorVertexShaderSource, errorFragmentShaderSource);
+    }
+
+    string vs(vsSize, '\0'), fs(fsSize, '\0');
+
+    vsf.read(&vs[0], vsSize);
+    fsf.read(&fs[0], fsSize);
+
+    // Create a new shader and add it to the table of created shaders
+    CelestiaGLProgram* prog = buildProgram(vs, fs);
+    staticShaders[name] = prog;
+
+    return prog;
+}
 
 static string
 LightProperty(unsigned int i, const char* property)
@@ -356,6 +435,8 @@ ShaderTypeString(ShaderVariableType type)
         return "vec3";
     case Shader_Vector4:
         return "vec4";
+    case Shader_Matrix4:
+        return "mat4";
     case Shader_Sampler1D:
         return "sampler1D";
     case Shader_Sampler2D:
@@ -905,11 +986,10 @@ static string
 DeclareLights(const ShaderProperties& props)
 {
     if (props.nLights == 0)
-        return string("");
+        return {};
 
-#ifndef USE_GLSL_STRUCTS
     ostringstream stream;
-
+#ifndef USE_GLSL_STRUCTS
     for (unsigned int i = 0; i < props.nLights; i++)
     {
         stream << "uniform vec3 light" << i << "_direction;\n";
@@ -931,7 +1011,7 @@ DeclareLights(const ShaderProperties& props)
     stream << "   vec3 halfVector;\n";
     if (props.texUsage & ShaderProperties::NightTexture)
         stream << "   float brightness;\n";
-    stream << "} lights[%d];\n";
+    stream << "} lights[" << props.nLights << "];\n";
 #endif
 
     return stream.str();
@@ -1162,7 +1242,7 @@ BeginLightSourceShadows(const ShaderProperties& props, unsigned int light)
 
     if (props.hasRingShadowForLight(light))
     {
-        if (GLEW_ARB_shader_texture_lod)
+        if (gl::ARB_shader_texture_lod)
         {
             source += mulAssign("shadow",
                       (1.0f - texture2DLod(sampler2D("ringTex"), vec2(ringShadowTexCoord(light), 0.0f), indexedUniform("ringShadowLOD", light))["a"]));
@@ -1473,6 +1553,15 @@ TextureSamplerDeclarations(const ShaderProperties& props)
         source += "uniform sampler2D overlayTex;\n";
     }
 
+    if (props.texUsage & ShaderProperties::ShadowMapTexture)
+    {
+#ifndef GL_ONLY_SHADOWS
+        source += DeclareUniform("shadowMapTex0", Shader_Sampler2D);
+#else
+        source += DeclareUniform("shadowMapTex0", Shader_Sampler2DShadow);
+#endif
+    }
+
     return source;
 }
 
@@ -1512,6 +1601,12 @@ TextureCoordDeclarations(const ShaderProperties& props)
             source += "varying vec2 overlayTexCoord;\n";
     }
 
+    if (props.texUsage & ShaderProperties::ShadowMapTexture)
+    {
+        source += DeclareVarying("shadowTexCoord0", Shader_Vector4);
+        source += DeclareVarying("cosNormalLightDir", Shader_Float);
+    }
+
     return source;
 }
 
@@ -1527,6 +1622,48 @@ PointSizeCalculation()
     return source;
 }
 
+static string
+CalculateShadow()
+{
+    string source;
+#if GL_ONLY_SHADOWS
+    source += R"glsl(
+float calculateShadow()
+{
+    float texelSize = 1.0 / shadowMapSize;
+    float s = 0.0;
+    float bias = max(0.005 * (1.0 - cosNormalLightDir), 0.0005);
+)glsl";
+    float boxFilterWidth = (float) ShadowSampleKernelWidth - 1.0f;
+    float firstSample = -boxFilterWidth / 2.0f;
+    float lastSample = firstSample + boxFilterWidth;
+    float sampleWeight = 1.0f / (float) (ShadowSampleKernelWidth * ShadowSampleKernelWidth);
+    source += fmt::sprintf("    for (float y = %f; y <= %f; y += 1.0)\n", firstSample, lastSample);
+    source += fmt::sprintf("        for (float x = %f; x <= %f; x += 1.0)\n", firstSample, lastSample);
+    source += "            s += shadow2D(shadowMapTex0, shadowTexCoord0.xyz + vec3(x * texelSize, y * texelSize, bias)).z;\n";
+    source += fmt::sprintf("    return s * %f;\n", sampleWeight);
+    source += "}\n";
+#else
+    source += R"glsl(
+float calculateShadow()
+{
+    float texelSize = 1.0 / shadowMapSize;
+    float s = 0.0;
+    float bias = max(0.005 * (1.0 - cosNormalLightDir), 0.0005);
+    for(float x = -1.0; x <= 1.0; x += 1.0)
+    {
+        for(float y = -1.0; y <= 1.0; y += 1.0)
+        {
+            float pcfDepth = texture2D(shadowMapTex0, shadowTexCoord0.xy + vec2(x * texelSize, y * texelSize)).r;
+            s += shadowTexCoord0.z - bias > pcfDepth ? 1.0 : 0.0;
+        }
+    }
+    return 1.0 - s / 9.0;
+}
+)glsl";
+#endif
+    return source;
+}
 
 GLVertexShader*
 ShaderManager::buildVertexShader(const ShaderProperties& props)
@@ -1545,13 +1682,6 @@ ShaderManager::buildVertexShader(const ShaderProperties& props)
     if (props.hasScattering())
     {
         source += ScatteringConstantDeclarations(props);
-    }
-
-    if (props.isViewDependent() || props.hasScattering())
-    {
-        source += "vec3 eyeDir = normalize(eyePosition - gl_Vertex.xyz);\n";
-        if (!props.usesTangentSpaceLighting())
-            source += "float NV = dot(gl_Normal, eyeDir);\n";
     }
 
     if (props.texUsage & ShaderProperties::PointSprite)
@@ -1590,7 +1720,6 @@ ShaderManager::buildVertexShader(const ShaderProperties& props)
         if (props.lightModel == ShaderProperties::SpecularModel)
         {
             source += "varying vec4 specFactors;\n";
-            source += "vec3 eyeDir = normalize(eyePosition - gl_Vertex.xyz);\n";
         }
     }
     else
@@ -1601,7 +1730,6 @@ ShaderManager::buildVertexShader(const ShaderProperties& props)
         if (props.lightModel == ShaderProperties::SpecularModel)
         {
             source += "varying vec4 spec;\n";
-            source += "vec3 eyeDir = normalize(eyePosition - gl_Vertex.xyz);\n";
         }
     }
 
@@ -1654,8 +1782,24 @@ ShaderManager::buildVertexShader(const ShaderProperties& props)
         }
     }
 
+    if (props.hasShadowMap())
+        source += "uniform mat4 ShadowMatrix0;\n";
+
     // Begin main() function
     source += "\nvoid main(void)\n{\n";
+    if (props.isViewDependent() || props.hasScattering())
+    {
+        source += "vec3 eyeDir = normalize(eyePosition - gl_Vertex.xyz);\n";
+        if (!props.usesTangentSpaceLighting())
+        {
+            source += "float NV = dot(gl_Normal, eyeDir);\n";
+        }
+    }
+    else if (props.lightModel == ShaderProperties::SpecularModel)
+    {
+        source += "vec3 eyeDir = normalize(eyePosition - gl_Vertex.xyz);\n";
+    }
+
     source += "float NL;\n";
     if (props.lightModel == ShaderProperties::SpecularModel)
     {
@@ -1689,6 +1833,11 @@ ShaderManager::buildVertexShader(const ShaderProperties& props)
         source += "diff = vec4(ambientColor, opacity);\n";
         if (props.hasSpecular())
             source += "spec = vec4(0.0, 0.0, 0.0, 0.0);\n";
+    }
+
+    if (props.hasShadowMap())
+    {
+        source += "cosNormalLightDir = dot(gl_Normal, lights[0].direction);\n";
     }
 
     for (unsigned int i = 0; i < props.nLights; i++)
@@ -1759,13 +1908,14 @@ ShaderManager::buildVertexShader(const ShaderProperties& props)
     if (props.hasRingShadows())
     {
         source += "vec3 ringShadowProj;\n";
+        source += "float t = -(dot(gl_Vertex.xyz, ringPlane.xyz) + ringPlane.w);\n";
         for (unsigned int j = 0; j < props.nLights; j++)
         {
             if (props.hasRingShadowForLight(j))
             {
                 source += "ringShadowProj = gl_Vertex.xyz + " +
                   LightProperty(j, "direction") +
-                  " * max(0.0, -(dot(gl_Vertex.xyz, ringPlane.xyz) + ringPlane.w) / dot(" +
+                  " * max(0.0, t / dot(" +
                   LightProperty(j, "direction") + ", ringPlane.xyz));\n";
 
                 source += RingShadowTexCoord(j) +
@@ -1837,6 +1987,9 @@ ShaderManager::buildVertexShader(const ShaderProperties& props)
     if ((props.texUsage & ShaderProperties::PointSprite) != 0)
         source += PointSizeCalculation();
 
+    if (props.hasShadowMap())
+        source += "shadowTexCoord0 = ShadowMatrix0 * vec4(gl_Vertex.xyz, 1);\n";
+
     source += "gl_Position = ftransform();\n";
     source += "}\n";
 
@@ -1855,7 +2008,7 @@ ShaderManager::buildFragmentShader(const ShaderProperties& props)
 
     // Without GL_ARB_shader_texture_lod enabled one can use texture2DLod
     // in vertext shaders only
-    if (GLEW_ARB_shader_texture_lod)
+    if (gl::ARB_shader_texture_lod)
         source += "#extension GL_ARB_shader_texture_lod : enable\n";
 
     string diffTexCoord("diffTexCoord");
@@ -1879,7 +2032,6 @@ ShaderManager::buildFragmentShader(const ShaderProperties& props)
     {
         source += "uniform vec3 ambientColor;\n";
         source += "uniform float opacity;\n";
-        source += "vec4 diff = vec4(ambientColor, opacity);\n";
         if (props.isViewDependent())
         {
             if (props.lightModel == ShaderProperties::SpecularModel)
@@ -1919,7 +2071,6 @@ ShaderManager::buildFragmentShader(const ShaderProperties& props)
         source += "uniform vec3 ambientColor;\n";
         source += "uniform float opacity;\n";
         source += "varying vec4 diffFactors;\n";
-        source += "vec4 diff = vec4(ambientColor, opacity);\n";
         source += "varying vec3 normal;\n";
         source += "vec4 spec = vec4(0.0);\n";
         source += "uniform float shininess;\n";
@@ -1935,7 +2086,6 @@ ShaderManager::buildFragmentShader(const ShaderProperties& props)
     {
         source += "uniform vec3 ambientColor;\n";
         source += "uniform float opacity;\n";
-        source += "vec4 diff = vec4(ambientColor, opacity);\n";
         source += "varying vec4 diffFactors;\n";
         if (props.lightModel == ShaderProperties::SpecularModel)
         {
@@ -2020,8 +2170,20 @@ ShaderManager::buildFragmentShader(const ShaderProperties& props)
         source += DeclareVarying("pointFade", Shader_Float);
     }
 
+    if (props.hasShadowMap())
+    {
+        source += DeclareUniform("shadowMapSize", Shader_Float);
+        source += CalculateShadow();
+    }
+
     source += "\nvoid main(void)\n{\n";
     source += "vec4 color;\n";
+    if (props.usesTangentSpaceLighting() ||
+        props.lightModel == ShaderProperties::PerPixelSpecularModel ||
+        props.usesShadows())
+    {
+        source += "vec4 diff = vec4(ambientColor, opacity);\n";
+    }
 
     if (props.usesShadows())
     {
@@ -2138,6 +2300,7 @@ ShaderManager::buildFragmentShader(const ShaderProperties& props)
     {
         source += "float NH;\n";
         source += "vec3 n = normalize(normal);\n";
+        source += "float shadowMapCoeff = 1.0;\n";
 
         // Sum the contributions from each light source
         for (unsigned i = 0; i < props.nLights; i++)
@@ -2155,6 +2318,12 @@ ShaderManager::buildFragmentShader(const ShaderProperties& props)
             source += "diff.rgb += " + illum + " * " + FragLightProperty(i, "color") + ";\n";
             source += "NH = max(0.0, dot(n, normalize(" + LightHalfVector(i) + ")));\n";
             source += "spec.rgb += " + illum + " * pow(NH, shininess) * " + FragLightProperty(i, "specColor") + ";\n";
+            if (props.hasShadowMap() && i == 0)
+            {
+                source += "shadowMapCoeff = calculateShadow();\n";
+                source += "diff.rgb *= shadowMapCoeff;\n";
+                source += "spec.rgb *= shadowMapCoeff;\n";
+            }
         }
     }
     else if (props.usesShadows())
@@ -2177,7 +2346,7 @@ ShaderManager::buildFragmentShader(const ShaderProperties& props)
     if (props.texUsage & ShaderProperties::DiffuseTexture)
     {
         if (props.texUsage & ShaderProperties::PointSprite)
-            source += "color = texture2D(diffTex, gl_TexCoord[0].st);\n";
+            source += "color = texture2D(diffTex, gl_PointCoord);\n";
         else
             source += "color = texture2D(diffTex, " + diffTexCoord + ".st);\n";
     }
@@ -2577,15 +2746,14 @@ ShaderManager::buildAtmosphereVertexShader(const ShaderProperties& props)
         source += "varying vec3 " + ScatteredColor(i) + ";\n";
     }
 
-    source += "vec3 eyeDir = normalize(eyePosition - gl_Vertex.xyz);\n";
-    source += "float NV = dot(gl_Normal, eyeDir);\n";
-
     source += "varying vec3 scatterEx;\n";
     source += "varying vec3 eyeDir_obj;\n";
 
     // Begin main() function
     source += "\nvoid main(void)\n{\n";
     source += "float NL;\n";
+    source += "vec3 eyeDir = normalize(eyePosition - gl_Vertex.xyz);\n";
+    source += "float NV = dot(gl_Normal, eyeDir);\n";
 
     source += AtmosphericEffects(props);
 
@@ -2615,10 +2783,15 @@ ShaderManager::buildAtmosphereFragmentShader(const ShaderProperties& props)
     source += "uniform vec3  rayleighCoeff;\n";
     source += "uniform vec3  invScatterCoeffSum;\n";
 
+#ifdef USE_GLSL_STRUCTS
+    source += DeclareLights(props);
+#endif
     unsigned int i;
     for (i = 0; i < props.nLights; i++)
     {
+#ifndef USE_GLSL_STRUCTS
         source += "uniform vec3 " + LightProperty(i, "direction") + ";\n";
+#endif
         source += "varying vec3 " + ScatteredColor(i) + ";\n";
     }
 
@@ -2747,7 +2920,10 @@ ShaderManager::buildEmissiveFragmentShader(const ShaderProperties& props)
 
     if (props.texUsage & ShaderProperties::DiffuseTexture)
     {
-        source += "    gl_FragColor = " + colorSource + " * texture2D(diffTex, gl_TexCoord[0].st);\n";
+        if (props.texUsage & ShaderProperties::PointSprite)
+            source += "    gl_FragColor = " + colorSource + " * texture2D(diffTex, gl_PointCoord);\n";
+        else
+            source += "    gl_FragColor = " + colorSource + " * texture2D(diffTex, gl_TexCoord[0].st);\n";
     }
     else
     {
@@ -2786,10 +2962,6 @@ ShaderManager::buildParticleVertexShader(const ShaderProperties& props)
     {
         source << "uniform float pointScale;\n";
         source << "attribute float pointSize;\n";
-    }
-
-    if (props.texUsage & ShaderProperties::PointSprite)
-    {
         source << DeclareVarying("pointFade", Shader_Float);
     }
 
@@ -2821,14 +2993,6 @@ ShaderManager::buildParticleVertexShader(const ShaderProperties& props)
 #else
     source << "    float brightness = 1.0;\n";
 #endif
-
-    // Optional texture coordinates (generated automatically for point
-    // sprites.)
-    if ((props.texUsage & ShaderProperties::DiffuseTexture) &&
-        !(props.texUsage & ShaderProperties::PointSprite))
-    {
-        source << "    gl_TexCoord[0].st = " << TexCoord2D(0) << ";\n";
-    }
 
     // Set the color. Should *always* use vertex colors for color and opacity.
     source << "    gl_FrontColor = gl_Color * brightness;\n";
@@ -2898,7 +3062,7 @@ ShaderManager::buildParticleFragmentShader(const ShaderProperties& props)
 
     if (props.texUsage & ShaderProperties::DiffuseTexture)
     {
-        source << "    gl_FragColor = gl_Color * texture2D(diffTex, gl_TexCoord[0].st);\n";
+        source << "    gl_FragColor = gl_Color * texture2D(diffTex, gl_PointCoord);\n";
     }
     else
     {
@@ -2916,37 +3080,26 @@ ShaderManager::buildParticleFragmentShader(const ShaderProperties& props)
 }
 
 GLVertexShader*
-ShaderManager::buildStaticVertexShader(const ShaderProperties& props)
+ShaderManager::buildSimpleVertexShader(uint32_t props)
 {
     ostringstream source;
 
-    source << CommonHeader << "// static shader\n";
+    source << CommonHeader;
 
-    if (props.texUsage & ShaderProperties::NormalTexture)
-    {
-        source << "uniform sampler2D normTex;\n";
-    }
-
-    if (props.texUsage & ShaderProperties::PointSprite)
-    {
-        source << DeclareUniform("pointScale", Shader_Float);
-        source << DeclareAttribute("pointSize", Shader_Float);
-    }
-
-    if (props.staticProps & ShaderProperties::UniformColor)
-        source << DeclareUniform("color", Shader_Vector4);
-    else
+    if (props & ShaderProperties::PerVertexColor)
         source << DeclareVarying("color", Shader_Vector4);
+
+    if (props & ShaderProperties::HasTexture)
+        source << DeclareVarying("texCoord", Shader_Vector2);
 
     // Begin main()
     source << "\nvoid main(void)\n";
     source << "{\n";
-    // Optional point size
-    if (props.texUsage & ShaderProperties::PointSprite)
-        source << "    gl_PointSize = pointSize;\n";
 
-    if (!(props.staticProps & ShaderProperties::UniformColor))
+    if (props & ShaderProperties::PerVertexColor)
         source << "    color = gl_Color;\n";
+    if (props & ShaderProperties::HasTexture)
+        source << "    texCoord = gl_MultiTexCoord0.st;\n";
     source << "    gl_Position = ftransform();\n";
 
     source << "}\n";
@@ -2961,34 +3114,32 @@ ShaderManager::buildStaticVertexShader(const ShaderProperties& props)
 
 
 GLFragmentShader*
-ShaderManager::buildStaticFragmentShader(const ShaderProperties& props)
+ShaderManager::buildSimpleFragmentShader(uint32_t props)
 {
     ostringstream source;
 
     source << CommonHeader;
 
-    if (props.texUsage & ShaderProperties::NormalTexture)
+    if (props & ShaderProperties::UniformColor)
+        source << DeclareUniform("color", Shader_Vector4);
+
+    if (props & ShaderProperties::HasTexture)
     {
-        source << "uniform sampler2D normTex;\n";
+        source << DeclareUniform("tex", Shader_Sampler2D);
+        source << DeclareVarying("texCoord", Shader_Vector2);
     }
 
-    if (props.staticProps & ShaderProperties::UniformColor)
-        source << DeclareUniform("color", Shader_Vector4);
-    else
+    if (props & ShaderProperties::PerVertexColor)
         source << DeclareVarying("color", Shader_Vector4);
 
     // Begin main()
     source << "\nvoid main(void)\n";
     source << "{\n";
 
-    if (props.texUsage & ShaderProperties::NormalTexture)
-    {
-        source << "    gl_FragColor = texture2D(normTex, gl_PointCoord) * color;\n";
-    }
+    if (props & ShaderProperties::HasTexture)
+        source << "    gl_FragColor = texture2D(tex, texCoord) * color;\n";
     else
-    {
         source << "    gl_FragColor = color;\n";
-    }
 
     source << "}\n";
     // End of main()
@@ -3011,10 +3162,10 @@ ShaderManager::buildProgram(const ShaderProperties& props)
     GLVertexShader* vs = nullptr;
     GLFragmentShader* fs = nullptr;
 
-    if (props.staticShader)
+    if (props.simpleProps != 0)
     {
-        vs = buildStaticVertexShader(props);
-        fs = buildStaticFragmentShader(props);
+        vs = buildSimpleVertexShader(props.simpleProps);
+        fs = buildSimpleFragmentShader(props.simpleProps);
     }
     else if (props.lightModel == ShaderProperties::RingIllumModel)
     {
@@ -3049,15 +3200,16 @@ ShaderManager::buildProgram(const ShaderProperties& props)
         {
             if (props.texUsage & ShaderProperties::NormalTexture)
             {
-                // Tangents always in attribute 6 (should be a constant
-                // someplace)
-                glBindAttribLocation(prog->getID(), 6, "tangent");
+                glBindAttribLocation(prog->getID(),
+                                     CelestiaGLProgram::TangentAttributeIndex,
+                                     "tangent");
             }
 
             if (props.texUsage & ShaderProperties::PointSprite)
             {
-                // Point size is always in attribute 7
-                glBindAttribLocation(prog->getID(), 7, "pointSize");
+                glBindAttribLocation(prog->getID(),
+                                     CelestiaGLProgram::PointSizeAttributeIndex,
+                                     "pointSize");
             }
 
             status = prog->link();
@@ -3095,6 +3247,51 @@ ShaderManager::buildProgram(const ShaderProperties& props)
     return new CelestiaGLProgram(*prog, props);
 }
 
+CelestiaGLProgram*
+ShaderManager::buildProgram(const std::string& vs, const std::string& fs)
+{
+    GLProgram* prog = nullptr;
+    GLShaderStatus status;
+
+    DumpVSSource(vs);
+    DumpFSSource(fs);
+
+    status = GLShaderLoader::CreateProgram(vs, fs, &prog);
+    if (status == ShaderStatus_OK)
+    {
+        // Tangents always in attribute 6 (should be a constant
+        // someplace)
+        glBindAttribLocation(prog->getID(), 6, "tangent");
+
+        // Point size is always in attribute 7
+        glBindAttribLocation(prog->getID(), 7, "pointSize");
+
+        status = prog->link();
+    }
+
+    if (status != ShaderStatus_OK)
+    {
+        // If the shader creation failed for some reason, substitute the
+        // error shader.
+        status = GLShaderLoader::CreateProgram(errorVertexShaderSource,
+                                               errorFragmentShaderSource,
+                                               &prog);
+        if (status != ShaderStatus_OK)
+        {
+            if (g_shaderLogFile != nullptr)
+                *g_shaderLogFile << "Failed to create error shader!\n";
+        }
+        else
+        {
+            status = prog->link();
+        }
+    }
+
+    if (prog == nullptr)
+        return nullptr;
+
+    return new CelestiaGLProgram(*prog);
+}
 
 CelestiaGLProgram::CelestiaGLProgram(GLProgram& _program,
                                      const ShaderProperties& _props) :
@@ -3105,6 +3302,11 @@ CelestiaGLProgram::CelestiaGLProgram(GLProgram& _program,
     initSamplers();
 };
 
+
+CelestiaGLProgram::CelestiaGLProgram(GLProgram& _program) :
+    program(&_program)
+{
+}
 
 CelestiaGLProgram::~CelestiaGLProgram()
 {
@@ -3119,6 +3321,20 @@ CelestiaGLProgram::floatParam(const string& paramName)
 }
 
 
+IntegerShaderParameter
+CelestiaGLProgram::intParam(const string& paramName)
+{
+    return IntegerShaderParameter(program->getID(), paramName.c_str());
+}
+
+
+IntegerShaderParameter
+CelestiaGLProgram::samplerParam(const string& paramName)
+{
+    return IntegerShaderParameter(program->getID(), paramName.c_str());
+}
+
+
 Vec3ShaderParameter
 CelestiaGLProgram::vec3Param(const string& paramName)
 {
@@ -3130,6 +3346,27 @@ Vec4ShaderParameter
 CelestiaGLProgram::vec4Param(const string& paramName)
 {
     return Vec4ShaderParameter(program->getID(), paramName.c_str());
+}
+
+
+Mat3ShaderParameter
+CelestiaGLProgram::mat3Param(const std::string& paramName)
+{
+    return Mat3ShaderParameter(program->getID(), paramName.c_str());
+}
+
+
+Mat4ShaderParameter
+CelestiaGLProgram::mat4Param(const std::string& paramName)
+{
+    return Mat4ShaderParameter(program->getID(), paramName.c_str());
+}
+
+
+int
+CelestiaGLProgram::attribIndex(const std::string& paramName) const
+{
+    return glGetAttribLocation(program->getID(), paramName.c_str());
 }
 
 
@@ -3196,6 +3433,11 @@ CelestiaGLProgram::initParameters()
         shadowTextureOffset = floatParam("cloudShadowTexOffset");
     }
 
+    if (props.texUsage & ShaderProperties::ShadowMapTexture)
+    {
+        ShadowMatrix0       = mat4Param("ShadowMatrix0");
+    }
+
     if (props.hasScattering())
     {
         mieCoeff             = floatParam("mieCoeff");
@@ -3219,10 +3461,9 @@ CelestiaGLProgram::initParameters()
         pointScale           = floatParam("pointScale");
     }
 
-    if (props.staticShader)
+    if (props.simpleProps & ShaderProperties::UniformColor)
     {
-        if (props.staticProps & ShaderProperties::UniformColor)
-            color            = vec4Param("color");
+        color                = vec4Param("color");
     }
 }
 
@@ -3286,6 +3527,13 @@ CelestiaGLProgram::initSamplers()
     if (props.texUsage & ShaderProperties::CloudShadowTexture)
     {
         int slot = glGetUniformLocation(program->getID(), "cloudShadowTex");
+        if (slot != -1)
+            glUniform1i(slot, nSamplers++);
+    }
+
+    if (props.texUsage & ShaderProperties::ShadowMapTexture)
+    {
+        int slot = glGetUniformLocation(program->getID(), "shadowMapTex0");
         if (slot != -1)
             glUniform1i(slot, nSamplers++);
     }

@@ -19,13 +19,14 @@
 #include "wineclipses.h"
 #include "res/resource.h"
 #include "celmath/geomutil.h"
-#include "celutil/util.h"
+#include "celutil/gettext.h"
 #include "celutil/winutil.h"
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 WNDPROC oldListViewProc;
 
@@ -55,7 +56,9 @@ bool InitEclipseFinderColumns(HWND listView)
     for (i = 0; i < nColumns; i++)
         columns[i] = lvc;
 
+#ifdef ENABLE_NLS
     bind_textdomain_codeset("celestia", CurrentCP());
+#endif
     columns[0].pszText = _("Planet");
     columns[0].cx = 65;
     columns[1].pszText = _("Satellite");
@@ -66,7 +69,9 @@ bool InitEclipseFinderColumns(HWND listView)
     columns[3].cx = 55;
     columns[4].pszText = _("Duration");
     columns[4].cx = 135;
+#ifdef ENABLE_NLS
     bind_textdomain_codeset("celestia", "UTF8");
+#endif
 
     for (i = 0; i < nColumns; i++)
     {
@@ -114,78 +119,53 @@ void EclipseFinderDisplayItem(LPNMLVDISPINFOA nm)
     switch (nm->item.iSubItem)
     {
     case 0:
-        {
-            strncpy(callbackScratch, UTF8ToCurrentCP(_(eclipse->planete.c_str())).c_str(), sizeof(callbackScratch) - 1);
-            nm->item.pszText = callbackScratch;
-        }
+        strncpy(callbackScratch, UTF8ToCurrentCP(_(eclipse->receiver->getName().c_str())).c_str(), sizeof(callbackScratch) - 1);
+        nm->item.pszText = callbackScratch;
         break;
 
     case 1:
-        {
-            if (!strcmp(eclipse->planete.c_str(),"None"))
-            {
-                sprintf(callbackScratch,"");
-                nm->item.pszText = callbackScratch;
-            }
-            else
-            {
-                strncpy(callbackScratch, UTF8ToCurrentCP(_(eclipse->sattelite.c_str())).c_str(), sizeof(callbackScratch) - 1);
-                nm->item.pszText = callbackScratch;
-            }
-        }
+        strncpy(callbackScratch, UTF8ToCurrentCP(_(eclipse->occulter->getName().c_str())).c_str(), sizeof(callbackScratch) - 1);
+        nm->item.pszText = callbackScratch;
         break;
 
     case 2:
         {
+#ifdef ENABLE_NLS
             bind_textdomain_codeset("celestia", CurrentCP());
+#endif
             astro::Date startDate(eclipse->startTime);
-            if (!strcmp(eclipse->planete.c_str(),"None"))
-                sprintf(callbackScratch,"");
-            else
-                sprintf(callbackScratch, "%2d %s %4d",
-                        startDate.day,
-                        _(MonthNames[startDate.month - 1]),
-                        startDate.year);
+            sprintf(callbackScratch, "%2d %s %4d",
+                    startDate.day,
+                    _(MonthNames[startDate.month - 1]),
+                    startDate.year);
             nm->item.pszText = callbackScratch;
+#ifdef ENABLE_NLS
             bind_textdomain_codeset("celestia", "UTF8");
+#endif
         }
         break;
 
     case 3:
         {
             astro::Date startDate(eclipse->startTime);
-            if (!strcmp(eclipse->planete.c_str(),"None"))
-                sprintf(callbackScratch,"");
-            else
-            {
-                sprintf(callbackScratch, "%02d:%02d",
-                        startDate.hour, startDate.minute);
-            }
+            sprintf(callbackScratch, "%02d:%02d",
+                    startDate.hour, startDate.minute);
             nm->item.pszText = callbackScratch;
         }
         break;
 
     case 4:
         {
-            if (!strcmp(eclipse->planete.c_str(),"None"))
-            {
-                sprintf(callbackScratch,"");
-                nm->item.pszText = callbackScratch;
-            }
-            else
-            {
-                int minutes = (int) ((eclipse->endTime - eclipse->startTime) *
-                                    24 * 60);
-                sprintf(callbackScratch, "%02d:%02d", minutes / 60, minutes % 60);
-                nm->item.pszText = callbackScratch;
-            }
+           int minutes = (int) ((eclipse->endTime - eclipse->startTime) * 24 * 60);
+           sprintf(callbackScratch, "%02d:%02d", minutes / 60, minutes % 60);
+           nm->item.pszText = callbackScratch;
         }
         break;
     }
 }
 
 
-void InitDateControls(HWND hDlg, astro::Date& newTime, SYSTEMTIME& fromTime, SYSTEMTIME& toTime)
+void InitDateControls(HWND hDlg, const astro::Date& newTime, SYSTEMTIME& fromTime, SYSTEMTIME& toTime)
 {
     HWND dateItem = NULL;
 
@@ -219,12 +199,11 @@ void InitDateControls(HWND hDlg, astro::Date& newTime, SYSTEMTIME& fromTime, SYS
 struct EclipseFinderSortInfo
 {
     int         subItem;
-    string      planete;
-    string      sattelite;
     int32_t     Year;
     int8_t      Month;
     int8_t      Day;
     int8_t      Hour;
+    int         Type;
 };
 
 
@@ -238,13 +217,10 @@ int CALLBACK EclipseFinderCompareFunc(LPARAM lParam0, LPARAM lParam1,
     switch (sortInfo->subItem)
     {
     case 1:
-        if (eclipse0->sattelite < eclipse1->sattelite)
-            return -1;
-        else if (eclipse1->sattelite < eclipse0->sattelite)
-            return 1;
-        else
-            return 0;
+        if (sortInfo->Type == Eclipse::Solar)
+            return eclipse0->occulter->getName(true).compare(eclipse1->occulter->getName(true));
 
+        return eclipse0->receiver->getName(true).compare(eclipse1->receiver->getName(true));
     case 4:
         {
             double duration0 = eclipse0->endTime - eclipse0->startTime;
@@ -312,9 +288,11 @@ BOOL APIENTRY EclipseFinderProc(HWND hDlg,
             InitEclipseFinderColumns(hwnd);
             SendDlgItemMessage(hDlg, IDC_ECLIPSES_LIST, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT);
 
+#ifdef ENABLE_NLS
             bind_textdomain_codeset("celestia", CurrentCP());
+#endif
             CheckRadioButton(hDlg, IDC_SOLARECLIPSE, IDC_LUNARECLIPSE, IDC_SOLARECLIPSE);
-            efd->bSolar = true;
+            efd->type = Eclipse::Solar;
 
             SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_ADDSTRING, 0, (LPARAM)_("Earth"));
             SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_ADDSTRING, 0, (LPARAM)_("Jupiter"));
@@ -324,7 +302,9 @@ BOOL APIENTRY EclipseFinderProc(HWND hDlg,
             SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_ADDSTRING, 0, (LPARAM)_("Pluto"));
             SendDlgItemMessage(hDlg, IDC_ECLIPSETARGET, CB_SETCURSEL, 0, 0);
             efd->strPlaneteToFindOn = "Earth";
+#ifdef ENABLE_NLS
             bind_textdomain_codeset("celestia", "UTF8");
+#endif
 
             InitDateControls(hDlg, astro::Date(efd->appCore->getSimulation()->getTime()), efd->fromTime, efd->toTime);
 
@@ -366,12 +346,18 @@ BOOL APIENTRY EclipseFinderProc(HWND hDlg,
                 astro::Date to(eclipseFinderDlg->toTime.wYear,
                                eclipseFinderDlg->toTime.wMonth,
                                eclipseFinderDlg->toTime.wDay);
-                EclipseFinder ef(eclipseFinderDlg->appCore,
-                                 eclipseFinderDlg->strPlaneteToFindOn,
-                                 eclipseFinderDlg->bSolar ? Eclipse::Solar : Eclipse::Moon,
-                                 (double) from,
-                                 (double) to);
-                eclipseList = ef.getEclipses();
+
+                const SolarSystem* sys = eclipseFinderDlg->appCore->getSimulation()->getNearestSolarSystem();
+                if (sys != nullptr && sys->getStar()->getIndex() == 0)
+                {
+                    Body* planete = sys->getPlanets()->find(eclipseFinderDlg->strPlaneteToFindOn);
+                    if (planete != nullptr)
+                    {
+                        EclipseFinder ef(planete);
+                        ef.findEclipses((double)from, (double)to, eclipseFinderDlg->type, eclipseList);
+                    }
+                }
+
                 InitEclipseFinderItems(hwnd, eclipseList);
                 SetMouseCursor(IDC_ARROW);
                 break;
@@ -408,10 +394,10 @@ BOOL APIENTRY EclipseFinderProc(HWND hDlg,
             }
             break;
         case IDC_SOLARECLIPSE:
-                eclipseFinderDlg->bSolar = true;
+                eclipseFinderDlg->type = Eclipse::Solar;
             break;
         case IDC_LUNARECLIPSE:
-                eclipseFinderDlg->bSolar = false;
+                eclipseFinderDlg->type = Eclipse::Lunar;
             break;
         case IDC_ECLIPSETARGET:
             if(HIWORD(wParam) == CBN_SELCHANGE)
@@ -462,7 +448,10 @@ BOOL APIENTRY EclipseFinderProc(HWND hDlg,
                             {
                                 eclipseFinderDlg->TimetoSet_ =
                                     (eclipse->startTime + eclipse->endTime) / 2.0f;
-                                eclipseFinderDlg->BodytoSet_ = eclipse->body;
+                                eclipseFinderDlg->BodytoSet_ =
+                                    eclipseFinderDlg->type == Eclipse::Solar ?
+                                        eclipse->receiver :
+                                        eclipse->occulter;
                             }
                         }
                         break;
@@ -475,6 +464,7 @@ BOOL APIENTRY EclipseFinderProc(HWND hDlg,
                             LPNMLISTVIEW nm = (LPNMLISTVIEW) lParam;
                             EclipseFinderSortInfo sortInfo;
                             sortInfo.subItem = nm->iSubItem;
+                            sortInfo.Type = eclipseFinderDlg->type;
 //                            sortInfo.sattelite = ;
 //                            sortInfo.pos = eclipseFinderDlg->pos;
                             ListView_SortItems(hwnd, EclipseFinderCompareFunc,

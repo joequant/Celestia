@@ -7,67 +7,44 @@
 // as published by the Free Software Foundation; either version 2
 // of the License, or (at your option) any later version.
 
+#include <config.h>
 #include <celutil/debug.h>
-#include <GL/glew.h>
-#include <celengine/celestia.h>
 #include "imagecapture.h"
 
 extern "C" {
-#ifdef _WIN32
-#include "jpeglib.h"
-#else
-#ifdef MACOSX
-#include "../celestia/Celestia.app.skel/Contents/Frameworks/Headers/jpeglib.h"
-#else
 #include <jpeglib.h>
-#endif
-#endif
 }
-
-#ifdef MACOSX
-#include "../celestia/Celestia.app.skel/Contents/Frameworks/Headers/png.h"
-#else
-#include "png.h"
-#endif
-
-// Define png_jmpbuf() in case we are using a pre-1.0.6 version of libpng
-#ifndef png_jmpbuf
-#define png_jmpbuf(png_ptr) png_ptr->jmpbuf
-#endif
-
-#if PNG_LIBPNG_VER < 10004
-// Define various expansion transformations for old versions of libpng
-#define png_set_palette_to_rgb(p)  png_set_expand(p)
-#define png_set_gray_1_2_4_to_8(p) png_set_expand(p)
-#define png_set_tRNS_to_alpha(p)   png_set_expand(p)
-#elif PNG_LIBPNG_VER >= 10500
-// libpng-1.5 include does not pull in zlib.h
-#include "zlib.h"
-#endif
+#include <png.h>
+#include <zlib.h>
 
 using namespace std;
 
 
-bool CaptureGLBufferToJPEG(const string& filename,
+bool CaptureGLBufferToJPEG(const fs::path& filename,
                            int x, int y,
-                           int width, int height)
+                           int width, int height,
+                           const Renderer *renderer)
 {
     int rowStride = (width * 3 + 3) & ~0x3;
     int imageSize = height * rowStride;
     auto* pixels = new unsigned char[imageSize];
 
-    glReadBuffer(GL_BACK);
-    glReadPixels(x, y, width, height,
-                 GL_RGB, GL_UNSIGNED_BYTE,
-                 pixels);
-
-    // TODO: Check for GL errors
+    if (!renderer->captureFrame(x, y, width, height,
+                                Renderer::PixelFormat::RGB,
+                                pixels, true))
+    {
+        return false;
+    }
 
     FILE* out;
+#ifdef _WIN32
+    out = _wfopen(filename.c_str(), L"wb");
+#else
     out = fopen(filename.c_str(), "wb");
+#endif
     if (out == nullptr)
     {
-        DPRINTF(0, "Can't open screen capture file '%s'\n", filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "Can't open screen capture file '%s'\n", filename);
         delete[] pixels;
         return false;
     }
@@ -116,26 +93,30 @@ void PNGWriteData(png_structp png_ptr, png_bytep data, png_size_t length)
 }
 
 
-bool CaptureGLBufferToPNG(const string& filename,
+bool CaptureGLBufferToPNG(const fs::path& filename,
                            int x, int y,
-                           int width, int height)
+                           int width, int height,
+                           const Renderer *renderer)
 {
     int rowStride = (width * 3 + 3) & ~0x3;
     int imageSize = height * rowStride;
     auto* pixels = new unsigned char[imageSize];
 
-    glReadBuffer(GL_BACK);
-    glReadPixels(x, y, width, height,
-                 GL_RGB, GL_UNSIGNED_BYTE,
-                 pixels);
+    if (!renderer->captureFrame(x, y, width, height,
+                                Renderer::PixelFormat::RGB,
+                                pixels, true))
+    {
+        return false;
+    }
 
-    // TODO: Check for GL errors
-
-    FILE* out;
-    out = fopen(filename.c_str(), "wb");
+#ifdef _WIN32
+    FILE* out = _wfopen(filename.c_str(), L"wb");
+#else
+    FILE* out = fopen(filename.c_str(), "wb");
+#endif
     if (out == nullptr)
     {
-        DPRINTF(0, "Can't open screen capture file '%s'\n", filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "Can't open screen capture file '%s'\n", filename);
         delete[] pixels;
         return false;
     }
@@ -152,7 +133,7 @@ bool CaptureGLBufferToPNG(const string& filename,
 
     if (png_ptr == nullptr)
     {
-        DPRINTF(0, "Screen capture: error allocating png_ptr\n");
+        DPRINTF(LOG_LEVEL_ERROR, "Screen capture: error allocating png_ptr\n");
         fclose(out);
         delete[] pixels;
         delete[] row_pointers;
@@ -162,7 +143,7 @@ bool CaptureGLBufferToPNG(const string& filename,
     info_ptr = png_create_info_struct(png_ptr);
     if (info_ptr == nullptr)
     {
-        DPRINTF(0, "Screen capture: error allocating info_ptr\n");
+        DPRINTF(LOG_LEVEL_ERROR, "Screen capture: error allocating info_ptr\n");
         fclose(out);
         delete[] pixels;
         delete[] row_pointers;
@@ -172,7 +153,7 @@ bool CaptureGLBufferToPNG(const string& filename,
 
     if (setjmp(png_jmpbuf(png_ptr)))
     {
-        DPRINTF(0, "Error writing PNG file '%s'\n", filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "Error writing PNG file '%s'\n", filename);
         fclose(out);
         delete[] pixels;
         delete[] row_pointers;
@@ -204,5 +185,3 @@ bool CaptureGLBufferToPNG(const string& filename,
 
     return true;
 }
-
-

@@ -10,28 +10,25 @@
  *  $Id: actions.cpp,v 1.17 2008-01-25 01:05:14 suwalski Exp $
  */
 
-#ifdef HAVE_CONFIG_H
 #include <config.h>
-#endif /* HAVE_CONFIG_H */
-
-#include <GL/glew.h>
 #include <cstring>
 #include <fstream>
 #include <gtk/gtk.h>
+#include <fmt/printf.h>
 
 #ifdef GNOME
 #include <gconf/gconf-client.h>
 #endif /* GNOME */
 
 #include <celengine/body.h>
-
+#include <celengine/glsupport.h>
 #include <celengine/simulation.h>
-#include <celengine/cmdparser.h>
 #include <celengine/render.h>
 #include <celestia/celestiacore.h>
-#include <celestia/imagecapture.h>
+#include <celestia/helper.h>
 #include <celestia/url.h>
 #include <celutil/filetype.h>
+#include <celutil/gettext.h>
 #ifdef THEORA
 #include <celestia/oggtheoracapture.h>
 #endif
@@ -571,16 +568,6 @@ void actionStarsFewer(GtkAction*, AppData* app)
 }
 
 
-void actionVideoSync(GtkToggleAction* action, AppData* app)
-{
-    app->renderer->setVideoSync(gtk_toggle_action_get_active(action));
-
-    #ifdef GNOME
-    gconf_client_set_bool(app->client, "/apps/celestia/videoSync", app->renderer->getVideoSync(), NULL);
-    #endif
-}
-
-
 void actionMenuBarVisible(GtkToggleAction* action, AppData* app)
 {
     g_object_set(G_OBJECT(app->mainMenu), "visible", gtk_toggle_action_get_active(action), NULL);
@@ -652,53 +639,8 @@ void actionHelpControls(GtkAction*, AppData* app)
 
 void actionHelpOpenGL(GtkAction*, AppData* app)
 {
-    /* Code grabbed from winmain.cpp */
-    char* vendor = (char*) glGetString(GL_VENDOR);
-    char* render = (char*) glGetString(GL_RENDERER);
-    char* version = (char*) glGetString(GL_VERSION);
-    char* ext = (char*) glGetString(GL_EXTENSIONS);
-
-    string s;
-    s = "Vendor: ";
-    if (vendor != NULL)
-        s += vendor;
-    s += "\n";
-
-    s += "Renderer: ";
-    if (render != NULL)
-        s += render;
-    s += "\n";
-
-    s += "Version: ";
-    if (version != NULL)
-        s += version;
-    s += "\n";
-
-    char buf[100];
-    GLint simTextures = 1;
-    glGetIntegerv(GL_MAX_TEXTURE_UNITS, &simTextures);
-    sprintf(buf, "Max simultaneous textures: %d\n", simTextures);
-    s += buf;
-
-    GLint maxTextureSize = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
-    sprintf(buf, "Max texture size: %d\n\n", maxTextureSize);
-    s += buf;
-
-    s += "Supported Extensions:\n    ";
-    if (ext != NULL)
-    {
-        string extString(ext);
-        unsigned int pos = extString.find(' ', 0);
-        while (pos != (unsigned int)string::npos)
-        {
-            extString.replace(pos, 1, "\n    ");
-            pos = extString.find(' ', pos + 5);
-        }
-        s += extString;
-    }
-
-    textInfoDialog(s.c_str(), "Open GL Info", app);
+    string s = Helper::getRenderInfo(app->renderer);
+    textInfoDialog(s.c_str(), "Renderer Info", app);
 }
 
 
@@ -881,6 +823,11 @@ void actionRenderOrbits(GtkToggleAction* action, AppData* app)
     setRenderFlag(app, Renderer::ShowOrbits, gtk_toggle_action_get_active(action));
 }
 
+void actionRenderFadingOrbits(GtkToggleAction* action, AppData* app)
+{
+    setRenderFlag(app, Renderer::ShowFadingOrbits, gtk_toggle_action_get_active(action));
+}
+
 
 void actionRenderPlanets(GtkToggleAction* action, AppData* app)
 {
@@ -1058,61 +1005,7 @@ static void openScript(const char* filename, AppData* app)
     {
         /* If you got here, a path and file has been specified.
          * filename contains full path to specified file. */
-        ContentType type = DetermineFileType(filename);
-
-        if (type == Content_CelestiaScript)
-        {
-            app->core->runScript(filename);
-        }
-        else if (type == Content_CelestiaLegacyScript)
-        {
-            ifstream scriptfile(filename);
-            if (!scriptfile.good())
-            {
-                GtkWidget* errBox = gtk_message_dialog_new(GTK_WINDOW(app->mainWindow),
-                                                           GTK_DIALOG_DESTROY_WITH_PARENT,
-                                                           GTK_MESSAGE_ERROR,
-                                                           GTK_BUTTONS_OK,
-                                                           "Error opening script file.");
-                gtk_dialog_run(GTK_DIALOG(errBox));
-                gtk_widget_destroy(errBox);
-            }
-            else
-            {
-                CommandParser parser(scriptfile);
-                CommandSequence* script = parser.parse();
-                if (script == NULL)
-                {
-                    const vector<string>* errors = parser.getErrors();
-                    const char* errorMsg = "";
-                    if (errors->size() > 0)
-                        errorMsg = (*errors)[0].c_str();
-                    GtkWidget* errBox = gtk_message_dialog_new(GTK_WINDOW(app->mainWindow),
-                                                               GTK_DIALOG_DESTROY_WITH_PARENT,
-                                                               GTK_MESSAGE_ERROR,
-                                                               GTK_BUTTONS_OK, "%s",
-                                                               errorMsg);
-                    gtk_dialog_run(GTK_DIALOG(errBox));
-                    gtk_widget_destroy(errBox);
-                }
-                else
-                {
-                    /* Cancel any running script */
-                    app->core->cancelScript();
-                    app->core->runScript(script);
-                }
-            }
-        }
-        else
-        {
-            GtkWidget* errBox = gtk_message_dialog_new(GTK_WINDOW(app->mainWindow),
-                                                       GTK_DIALOG_DESTROY_WITH_PARENT,
-                                                       GTK_MESSAGE_ERROR,
-                                                       GTK_BUTTONS_OK,
-                                                       "Bad File Type. Use *.(cel|celx|clx).");
-            gtk_dialog_run(GTK_DIALOG(errBox));
-            gtk_widget_destroy(errBox);
-        }
+        app->core->runScript(filename);
     }
 }
 
@@ -1120,48 +1013,20 @@ static void openScript(const char* filename, AppData* app)
 /* Image capturing helper called by actionCaptureImage() */
 static void captureImage(const char* filename, AppData* app)
 {
-    /* Get the dimensions of the current viewport */
-    int viewport[4];
-    glGetIntegerv(GL_VIEWPORT, viewport);
-
-    bool success = false;
     ContentType type = DetermineFileType(filename);
-    if (type == Content_Unknown)
+    if (type != Content_JPEG && type != Content_PNG)
     {
         GtkWidget* errBox = gtk_message_dialog_new(GTK_WINDOW(app->mainWindow),
                                                    GTK_DIALOG_DESTROY_WITH_PARENT,
                                                    GTK_MESSAGE_ERROR,
                                                    GTK_BUTTONS_OK,
-                                                   "Unable to determine image file type from name, please use a name ending in '.jpg' or '.png'.");
-        gtk_dialog_run(GTK_DIALOG(errBox));
-        gtk_widget_destroy(errBox);
-        return;
-    }
-    else if (type == Content_JPEG)
-    {
-        success = CaptureGLBufferToJPEG(filename,
-                                        viewport[0], viewport[1],
-                                        viewport[2], viewport[3]);
-    }
-    else if (type == Content_PNG)
-    {
-        success = CaptureGLBufferToPNG(filename,
-                                       viewport[0], viewport[1],
-                                       viewport[2], viewport[3]);
-    }
-    else
-    {
-        GtkWidget* errBox = gtk_message_dialog_new(GTK_WINDOW(app->mainWindow),
-                                                   GTK_DIALOG_DESTROY_WITH_PARENT,
-                                                   GTK_MESSAGE_ERROR,
-                                                   GTK_BUTTONS_OK,
-                                                   "Currently screen capturing to only JPEG or PNG files is supported.");
+                                                   _("Please use a name ending in '.jpg' or '.png'."));
         gtk_dialog_run(GTK_DIALOG(errBox));
         gtk_widget_destroy(errBox);
         return;
     }
 
-    if (!success)
+    if (!app->core->saveScreenShot(filename))
     {
         GtkWidget* errBox = gtk_message_dialog_new(GTK_WINDOW(app->mainWindow),
                                                    GTK_DIALOG_DESTROY_WITH_PARENT,
@@ -1178,10 +1043,10 @@ static void captureImage(const char* filename, AppData* app)
 static void captureMovie(const char* filename, int aspect, float fps, float quality, AppData* app)
 {
     /* Get the dimensions of the current viewport */
-    int viewport[4];
-    glGetIntegerv(GL_VIEWPORT, viewport);
+    array<int, 4> viewport;
+    app->renderer->getViewport(viewport);
 
-    MovieCapture* movieCapture = new OggTheoraCapture();
+    MovieCapture* movieCapture = new OggTheoraCapture(app->renderer);
     switch (aspect)
     {
     case 0:
@@ -1361,6 +1226,7 @@ void resyncRenderActions(AppData* app)
             case Renderer::ShowDiagrams: actionName = "RenderConstellations"; break;
             case Renderer::ShowCloudMaps: actionName = "RenderClouds"; break;
             case Renderer::ShowOrbits: actionName = "RenderOrbits"; break;
+            case Renderer::ShowFadingOrbits: actionName = "RenderFadingOrbits"; break;
             case Renderer::ShowCelestialSphere: actionName = "RenderCelestialGrid"; break;
             case Renderer::ShowNightMaps: actionName = "RenderNightLights"; break;
             case Renderer::ShowAtmospheres: actionName = "RenderAtmospheres"; break;

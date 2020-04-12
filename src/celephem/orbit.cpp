@@ -20,6 +20,7 @@
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 
 // Orbital velocity is computed by differentiation for orbits that don't
@@ -195,7 +196,7 @@ EllipticalOrbit::EllipticalOrbit(double _pericenterDistance,
 
 
 // Standard iteration for solving Kepler's Equation
-struct SolveKeplerFunc1 : public unary_function<double, double>
+struct SolveKeplerFunc1
 {
     double ecc;
     double M;
@@ -212,7 +213,7 @@ struct SolveKeplerFunc1 : public unary_function<double, double>
 // Faster converging iteration for Kepler's Equation; more efficient
 // than above for orbits with eccentricities greater than 0.3.  This
 // is from Jean Meeus's _Astronomical Algorithms_ (2nd ed), p. 199
-struct SolveKeplerFunc2 : public unary_function<double, double>
+struct SolveKeplerFunc2
 {
     double ecc;
     double M;
@@ -226,7 +227,7 @@ struct SolveKeplerFunc2 : public unary_function<double, double>
 };
 
 
-struct SolveKeplerLaguerreConway : public unary_function<double, double>
+struct SolveKeplerLaguerreConway
 {
     double ecc;
     double M;
@@ -246,7 +247,7 @@ struct SolveKeplerLaguerreConway : public unary_function<double, double>
     }
 };
 
-struct SolveKeplerLaguerreConwayHyp : public unary_function<double, double>
+struct SolveKeplerLaguerreConwayHyp
 {
     double ecc;
     double M;
@@ -296,7 +297,7 @@ double EllipticalOrbit::eccentricAnomaly(double M) const
         // much faster converging iteration.
         Solution sol = solve_iteration_fixed(SolveKeplerFunc2(eccentricity, M), M, 6);
         // Debugging
-        // fmt::printf("ecc: %f, error: %f mas\n",
+        // DPRINTF(LOG_LEVEL_INFO, "ecc: %f, error: %f mas\n",
         //        eccentricity, radToDeg(sol.second) * 3600000);
         return sol.first;
     }

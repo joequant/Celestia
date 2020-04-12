@@ -20,6 +20,7 @@
 #include <QApplication>
 #include <QSplashScreen>
 #include <QDesktopServices>
+#include <QDir>
 #include <QPixmap>
 #include <QBitmap>
 #include "qtgettext.h"
@@ -30,13 +31,8 @@
 #include <qtextcodec.h>
 #include <fmt/printf.h>
 
-#ifndef SPLASH_DIR
-#define SPLASH_DIR
-#endif
-
 using namespace std;
 
-extern "C" { FILE __iob_func[3] = { *stdin,*stdout,*stderr }; }
 //static const char *description = "Celestia";
 
 // Command line options
@@ -54,6 +50,7 @@ static bool ParseCommandLine();
 
 int main(int argc, char *argv[])
 {
+    QCoreApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
     QApplication app(argc, argv);
 
     QTranslator qtTranslator;
@@ -66,27 +63,41 @@ int main(int argc, char *argv[])
 
     Q_INIT_RESOURCE(icons);
 
-    QCoreApplication::setAttribute(Qt::AA_UseDesktopOpenGL);
     QCoreApplication::setOrganizationName("Celestia Development Team");
     QCoreApplication::setApplicationName("Celestia QT");
 
     ParseCommandLine();
 
-    QPixmap pixmap(SPLASH_DIR "splash.png");
+#ifdef NATIVE_OSX_APP
+    // On macOS data directory is in a fixed position relative to the application bundle
+    QDir splashDir(QApplication::applicationDirPath() + "/../Resources/splash");
+#else
+    QDir splashDir(SPLASH_DIR);
+#endif
+    QPixmap pixmap(splashDir.filePath("splash.png"));
     QSplashScreen splash(pixmap);
     splash.setMask(pixmap.mask());
 
     // TODO: resolve issues with pixmap alpha channel
     splash.show();
+    app.processEvents();
 
     // Gettext integration
     setlocale(LC_ALL, "");
     setlocale(LC_NUMERIC, "C");
-    bindtextdomain("celestia", LOCALEDIR);
+#ifdef ENABLE_NLS
+#ifdef NATIVE_OSX_APP
+    // On macOS locale directory is in a fixed position relative to the application bundle
+    QString localeDir = QApplication::applicationDirPath() + "/../Resources/locale";
+#else
+    QString localeDir = LOCALEDIR;
+#endif
+    bindtextdomain("celestia", localeDir.toUtf8().data());
     bind_textdomain_codeset("celestia", "UTF-8");
-    bindtextdomain("celestia_constellations", LOCALEDIR);
+    bindtextdomain("celestia_constellations", localeDir.toUtf8().data());
     bind_textdomain_codeset("celestia_constellations", "UTF-8");
     textdomain("celestia");
+#endif
 
     CelestiaAppWindow window;
 

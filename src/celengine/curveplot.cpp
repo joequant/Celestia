@@ -31,11 +31,11 @@
 #if DEBUG_ADAPTIVE_SPLINE
 #define USE_VERTEX_BUFFER 0
 #else
-#define USE_VERTEX_BUFFER 0
+#define USE_VERTEX_BUFFER 1
 #endif
 
+#include "glsupport.h"
 #include "curveplot.h"
-#include "GL/glew.h"
 #include <vector>
 #include <iostream>
 
@@ -164,7 +164,12 @@ public:
         vbobj(0),
         currentStripLength(0)
     {
-        data = new Vector4f[capacity];
+        data = new Vertex[capacity];
+    }
+
+    ~HighPrec_VertexBuffer()
+    {
+        delete[] data;
     }
 
     void setup()
@@ -176,11 +181,15 @@ public:
         }
 
         glEnableClientState(GL_VERTEX_ARRAY);
+        glEnableClientState(GL_COLOR_ARRAY);
 
         mapBuffer();
 
-        Vector4f* vertexBase = vbobj ? (Vector4f*) nullptr : data;
-        glVertexPointer(3, GL_FLOAT, sizeof(Vector4f), vertexBase);
+        Vector4f* vertexBase = vbobj ? (Vector4f*) offsetof(Vertex, position) : &data[0].position;
+        glVertexPointer(3, GL_FLOAT, sizeof(Vertex), vertexBase);
+
+        Vector4f* colorBase = vbobj ? (Vector4f*) offsetof(Vertex, color) : &data[0].color;
+        glColorPointer(4, GL_FLOAT, sizeof(Vertex), colorBase);
 
         stripLengths.clear();
         currentStripLength = 0;
@@ -195,6 +204,7 @@ public:
 #if USE_VERTEX_BUFFER
         if (vbobj)
         {
+            glDisableClientState(GL_COLOR_ARRAY);
             glDisableClientState(GL_VERTEX_ARRAY);
             glBindBuffer(GL_ARRAY_BUFFER, 0);
         }
@@ -204,13 +214,16 @@ public:
     inline void vertex(const Vector3d& v)
     {
 #if USE_VERTEX_BUFFER
-        data[currentPosition++].segment<3>(0) = v.cast<float>();
+        data[currentPosition].position.segment<3>(0) = v.cast<float>();
+        data[currentPosition].color = color;
+        ++currentPosition;
         ++currentStripLength;
         if (currentPosition == capacity)
         {
             flush();
 
-            data[0].segment<3>(0) = v.cast<float>();
+            data[0].position.segment<3>(0) = v.cast<float>();
+            data[0].color = color;
             currentPosition = 1;
             currentStripLength = 1;
         }
@@ -222,13 +235,16 @@ public:
     inline void vertex(const Vector4d& v)
     {
 #if USE_VERTEX_BUFFER
-        data[currentPosition++] = v.cast<float>();
+        data[currentPosition].position = v.cast<float>();
+        data[currentPosition].color = color;
+        ++currentPosition;
         ++currentStripLength;
         if (currentPosition == capacity)
         {
             flush();
 
-            data[0] = v.cast<float>();
+            data[0].position = v.cast<float>();
+            data[0].color = color;
             currentPosition = 1;
             currentStripLength = 1;
         }
@@ -240,13 +256,16 @@ public:
     inline void vertex(const Vector4d& v, const Vector4f& color)
     {
 #if USE_VERTEX_BUFFER
-        data[currentPosition++] = v.cast<float>();
+        data[currentPosition].position = v.cast<float>();
+        data[currentPosition].color = color;
+        ++currentPosition;
         ++currentStripLength;
         if (currentPosition == capacity)
         {
             flush();
 
-            data[0] = v.cast<float>();
+            data[0].position = v.cast<float>();
+            data[0].color = color;
             currentPosition = 1;
             currentStripLength = 1;
         }
@@ -309,7 +328,7 @@ public:
             glGenBuffers(1, &vbobj);
             glBindBuffer(GL_ARRAY_BUFFER, vbobj);
             glBufferData(GL_ARRAY_BUFFER,
-                         capacity * sizeof(Vector4f),
+                         capacity * sizeof(Vertex),
                          nullptr,
                          GL_STREAM_DRAW);
         }
@@ -325,11 +344,11 @@ public:
             // be discarded and overwritten. It enables renaming in the driver,
             // hopefully resulting in performance gains.
             glBufferData(GL_ARRAY_BUFFER,
-                         capacity * sizeof(Vector4f),
+                         capacity * sizeof(Vertex),
                          nullptr,
                          GL_STREAM_DRAW);
 
-            data = reinterpret_cast<Vector4f*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY));
+            data = reinterpret_cast<Vertex*>(glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY));
         }
     }
 
@@ -343,14 +362,29 @@ public:
         }
 #endif
     }
+
+    void setColor(const Vector4f &aColor)
+    {
+#if USE_VERTEX_BUFFER
+        color = aColor;
+#else
+        glColor4fv(aColor.data());
+#endif
+    }
         
 private:
     unsigned int currentPosition;
     unsigned int capacity;
-    Vector4f* data;
+    struct Vertex
+    {
+        Vector4f position;
+        Vector4f color;
+    };
+    Vertex* data;
     GLuint vbobj;
     unsigned int currentStripLength;
     vector<unsigned int> stripLengths;
+    Vector4f color;
 };
 
 
@@ -639,14 +673,15 @@ CurvePlot::setDuration(double duration)
   * @param nearZ z coordinate of the near plane
   * @param farZ z coordinate of the far plane
   * @param viewFrustumPlaneNormals array of four normals (top, bottom, left, and right frustum planes)
-  * @param subdivisionThreshold
+  * @param subdivisionThreshold the threashhold for subdivision
   */
 void
 CurvePlot::render(const Affine3d& modelview,
                   double nearZ,
                   double farZ,
                   const Vector3d viewFrustumPlaneNormals[],
-                  double subdivisionThreshold) const
+                  double subdivisionThreshold,
+                  const Vector4f& color) const
 {
     // Flag to indicate whether we need to issue a glBegin()
     bool restartCurve = true;
@@ -666,6 +701,7 @@ CurvePlot::render(const Affine3d& modelview,
 
     vbuf.createVertexBuffer();
     vbuf.setup();
+    vbuf.setColor(color);
 
     for (unsigned int i = 1; i < m_samples.size(); i++)
     {
@@ -777,7 +813,7 @@ CurvePlot::render(const Affine3d& modelview,
   * @param nearZ z coordinate of the near plane
   * @param farZ z coordinate of the far plane
   * @param viewFrustumPlaneNormals array of four normals (top, bottom, left, and right frustum planes)
-  * @param subdivisionThreshold
+  * @param subdivisionThreshold the threashhold for subdivision
   * @param startTime the beginning of the time interval
   * @param endTime the end of the time interval
   */
@@ -788,7 +824,8 @@ CurvePlot::render(const Affine3d& modelview,
                   const Vector3d viewFrustumPlaneNormals[],
                   double subdivisionThreshold,
                   double startTime,
-                  double endTime) const
+                  double endTime,
+                  const Vector4f& color) const
 {
     // Flag to indicate whether we need to issue a glBegin()
     bool restartCurve = true;
@@ -815,6 +852,7 @@ CurvePlot::render(const Affine3d& modelview,
 
     vbuf.createVertexBuffer();
     vbuf.setup();
+    vbuf.setColor(color);
 
     bool firstSegment = true;
     bool lastSegment = false;
@@ -939,7 +977,7 @@ CurvePlot::render(const Affine3d& modelview,
   * @param nearZ z coordinate of the near plane
   * @param farZ z coordinate of the far plane
   * @param viewFrustumPlaneNormals array of four normals (top, bottom, left, and right frustum planes)
-  * @param subdivisionThreshold
+  * @param subdivisionThreshold the threashhold for subdivision
   * @param startTime the beginning of the time interval
   * @param endTime the end of the time interval
   * @param fadeStartTime points on the curve before this time are drawn with full opacity

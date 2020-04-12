@@ -14,7 +14,7 @@
 #include <celengine/univcoord.h>
 #include <Eigen/Core>
 
-class CatEntry;
+class AstroObject;
 class Star;
 class Body;
 class Location;
@@ -23,7 +23,8 @@ class DeepSkyObject;
 class Selection
 {
  public:
-    enum Type {
+    enum Type
+    {
         Type_Nil,
         Type_Star,
         Type_Body,
@@ -32,15 +33,14 @@ class Selection
         Type_Generic
     };
 
-public:
-    Selection() : type(Type_Nil), obj(nullptr) {};
-    Selection(CatEntry *cat) : type(Type_Generic), obj(cat) { checkNull(); };
+    Selection() = default;
+    Selection(AstroObject *o) : type(Type_Generic), obj(o) { checkNull(); };
     Selection(Star* star) : type(Type_Star), obj(star) { checkNull(); };
     Selection(Body* body) : type(Type_Body), obj(body) { checkNull(); };
     Selection(DeepSkyObject* deepsky) : type(Type_DeepSky), obj(deepsky) {checkNull(); };
     Selection(Location* location) : type(Type_Location), obj(location) { checkNull(); };
     Selection(const Selection& sel) : type(sel.type), obj(sel.obj) {};
-    ~Selection() {};
+    ~Selection() = default;
 
     bool empty() const { return type == Type_Nil; }
     double radius() const;
@@ -71,18 +71,21 @@ public:
         return type == Type_Location ? static_cast<Location*>(obj) : nullptr;
     }
 
-    CatEntry *catEntry() const
+    AstroObject *object() const
     {
-        return type != Type_Nil ? static_cast<CatEntry*>(obj) : nullptr;
+        return type != Type_Nil ? static_cast<AstroObject*>(obj) : nullptr;
     }
 
     Type getType() const { return type; }
 
-    // private:
-    Type type;
-    void* obj;
+ private:
+    Type type { Type_Nil };
+    void* obj { nullptr };
 
     void checkNull() { if (obj == nullptr) type = Type_Nil; }
+
+    friend bool operator==(const Selection& s0, const Selection& s1);
+    friend bool operator!=(const Selection& s0, const Selection& s1);
 };
 
 

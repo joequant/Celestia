@@ -13,10 +13,10 @@
 #include <celutil/debug.h>
 #include <celutil/bytes.h>
 #include <celengine/image.h>
-#include <GL/glew.h>
+#include "glsupport.h"
 
+using namespace celestia;
 using namespace std;
-
 
 
 struct DDPixelFormat
@@ -83,12 +83,12 @@ static uint32_t FourCC(const char* s)
 #define DDPF_FOURCC 0x04
 
 
-Image* LoadDDSImage(const string& filename)
+Image* LoadDDSImage(const fs::path& filename)
 {
-    ifstream in(filename, ios::in | ios::binary);
+    ifstream in(filename.string(), ios::in | ios::binary);
     if (!in.good())
     {
-        DPRINTF(0, "Error opening DDS texture file %s.\n", filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "Error opening DDS texture file %s.\n", filename);
         return nullptr;
     }
 
@@ -97,7 +97,7 @@ Image* LoadDDSImage(const string& filename)
     if (header[0] != 'D' || header[1] != 'D' ||
         header[2] != 'S' || header[3] != ' ')
     {
-        DPRINTF(0, "DDS texture file %s has bad header.\n", filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "DDS texture file %s has bad header.\n", filename);
         return nullptr;
     }
 
@@ -176,8 +176,7 @@ Image* LoadDDSImage(const string& filename)
 
     if (format == -1)
     {
-        DPRINTF(0, "Unsupported format for DDS texture file %s.\n",
-                filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "Unsupported format for DDS texture file %s.\n", filename);
         return nullptr;
     }
 
@@ -187,7 +186,7 @@ Image* LoadDDSImage(const string& filename)
         format == GL_COMPRESSED_RGBA_S3TC_DXT3_EXT ||
         format == GL_COMPRESSED_RGBA_S3TC_DXT5_EXT)
     {
-        if (!GLEW_EXT_texture_compression_s3tc)
+        if (!gl::EXT_texture_compression_s3tc)
             return nullptr;
     }
 
@@ -201,8 +200,7 @@ Image* LoadDDSImage(const string& filename)
     in.read(reinterpret_cast<char*>(img->getPixels()), img->getSize());
     if (!in.eof() && !in.good())
     {
-        DPRINTF(0, "Failed reading data from DDS texture file %s.\n",
-                filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "Failed reading data from DDS texture file %s.\n", filename);
         delete img;
         return nullptr;
     }

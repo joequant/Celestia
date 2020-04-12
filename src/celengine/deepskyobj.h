@@ -14,9 +14,12 @@
 #include <string>
 #include <iostream>
 #include <celmath/ray.h>
-#include <celengine/catentry.h>
+#include <celengine/astroobj.h>
+#ifdef USE_GLCONTEXT
 #include <celengine/glcontext.h>
+#endif
 #include <celengine/parser.h>
+#include <celcompat/filesystem.h>
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
@@ -30,7 +33,7 @@ class Galaxy;
 class Globular;
 class OpenCluster;
 
-class DeepSkyObject : public CatEntry
+class DeepSkyObject : public AstroObject
 {
  public:
     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
@@ -38,12 +41,6 @@ class DeepSkyObject : public CatEntry
     virtual Selection toSelection();
     DeepSkyObject() = default;
     virtual ~DeepSkyObject() = default;
-
-    inline uint32_t getCatalogNumber() const
-    {
-        return catalogNumber;
-    }
-    void setCatalogNumber(uint32_t);
 
     Eigen::Vector3d getPosition() const;
     void setPosition(const Eigen::Vector3d&);
@@ -85,26 +82,20 @@ class DeepSkyObject : public CatEntry
 
     virtual const char* getObjTypeName() const = 0;
 
-    virtual bool pick(const Ray3d& ray,
+    virtual bool pick(const celmath::Ray3d& ray,
                       double& distanceToPicker,
                       double& cosAngleToBoundCenter) const = 0;
-    virtual bool load(AssociativeArray*, const std::string& resPath);
+    virtual bool load(AssociativeArray*, const fs::path& resPath);
     virtual void render(const Eigen::Vector3f& offset,
                         const Eigen::Quaternionf& viewerOrientation,
                         float brightness,
                         float pixelSize,
                         const Renderer*) = 0;
 
-    virtual unsigned int getRenderMask() const { return 0; }
+    virtual uint64_t getRenderMask() const { return 0; }
     virtual unsigned int getLabelMask() const { return 0; }
 
-    enum : uint32_t
-    {
-        InvalidCatalogNumber = 0xffffffff
-    };
-
  private:
-    uint32_t     catalogNumber{ InvalidCatalogNumber };
     Eigen::Vector3d position{ Eigen::Vector3d::Zero() };
     Eigen::Quaternionf orientation{ Eigen::Quaternionf::Identity() };
     float        radius{ 1 };

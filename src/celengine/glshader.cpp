@@ -9,7 +9,6 @@
 
 #include <iostream>
 #include "glshader.h"
-#include <GL/glew.h>
 
 using namespace std;
 
@@ -121,6 +120,63 @@ Vec4ShaderParameter::operator=(const Eigen::Vector4f& v)
 {
     if (slot != -1)
         glUniform4fv(slot, 1, v.data());
+    return *this;
+}
+
+
+IntegerShaderParameter::IntegerShaderParameter() :
+    slot(-1)
+{
+}
+
+IntegerShaderParameter::IntegerShaderParameter(GLuint obj, const char* name)
+{
+    slot = glGetUniformLocation(obj, name);
+}
+
+IntegerShaderParameter&
+IntegerShaderParameter::operator=(int i)
+{
+    if (slot != -1)
+        glUniform1i(slot, i);
+    return *this;
+}
+
+
+Mat3ShaderParameter::Mat3ShaderParameter() :
+    slot(-1)
+{
+}
+
+Mat3ShaderParameter::Mat3ShaderParameter(GLuint obj, const char* name)
+{
+    slot = glGetUniformLocation(obj, name);
+}
+
+Mat3ShaderParameter&
+Mat3ShaderParameter::operator=(const Eigen::Matrix3f& v)
+{
+    if (slot != -1)
+        glUniformMatrix3fv(slot, 1, GL_FALSE, v.data());
+    return *this;
+}
+
+
+Mat4ShaderParameter::Mat4ShaderParameter() :
+    slot(-1)
+{
+}
+
+Mat4ShaderParameter::Mat4ShaderParameter(GLuint obj, const char* name)
+{
+    slot = glGetUniformLocation(obj, name);
+}
+
+Mat4ShaderParameter&
+Mat4ShaderParameter::operator=(const Eigen::Matrix4f& v)
+{
+    if (slot != -1)
+        glUniformMatrix4fv(slot, 1, GL_FALSE, v.data());
     return *this;
 }
 
@@ -324,13 +380,36 @@ GetInfoLog(GLuint obj)
     GLint logLength = 0;
     GLsizei charsWritten = 0;
 
-    glGetShaderiv(obj, GL_INFO_LOG_LENGTH, &logLength);
+    enum { Unknown, Shader, Program } kind;
+
+    if (glIsShader(obj))
+    {
+        kind = Shader;
+    }
+    else if (glIsProgram(obj))
+    {
+        kind = Program;
+    }
+    else
+    {
+        cerr << "Unknown object passed to GetInfoLog()!\n";
+        return string();
+    }
+
+    if (kind == Shader)
+        glGetShaderiv(obj, GL_INFO_LOG_LENGTH, &logLength);
+    else
+        glGetProgramiv(obj, GL_INFO_LOG_LENGTH, &logLength);
+
     if (logLength <= 0)
         return string();
 
     auto* log = new char[logLength];
 
-    glGetShaderInfoLog(obj, logLength, &charsWritten, log);
+    if (kind == Shader)
+        glGetShaderInfoLog(obj, logLength, &charsWritten, log);
+    else
+        glGetProgramInfoLog(obj, logLength, &charsWritten, log);
 
     string s(log, charsWritten);
     delete[] log;

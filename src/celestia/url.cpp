@@ -20,14 +20,15 @@
 #include <sstream>
 #include <iomanip>
 #include <utility>
-#include <fmt/printf.h>
+#include <celengine/astro.h>
+#include <celutil/debug.h>
+#include <celutil/gettext.h>
 #include "celestiacore.h"
-#include "celutil/util.h"
-#include "celengine/astro.h"
 #include "url.h"
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 const unsigned int Url::CurrentVersion = 4;
 constexpr const uint64_t NewRenderFlags = Renderer::ShowDwarfPlanets |
@@ -46,7 +47,7 @@ CelestiaState::captureState(CelestiaCore* appCore)
     Simulation *sim = appCore->getSimulation();
     Renderer *renderer = appCore->getRenderer();
 
-    const ObserverFrame* frame = sim->getFrame();
+    auto frame = sim->getFrame();
 
     coordSys = frame->getCoordinateSystem();
     if (coordSys != ObserverFrame::Universal)
@@ -107,29 +108,29 @@ bool CelestiaState::loadState(std::map<std::string, std::string> params)
 
     orientation = Quatf(ow, ox, oy, oz);
 
-    if (params["select"] != "")
+    if (params.count("select") != 0)
         selectedBodyName = params["select"];
-    if (params["track"] != "")
+    if (params.count("track") != 0)
         trackedBodyName = params["track"];
-    if (params["ltd"] != "")
+    if (params.count("ltd") != 0)
         lightTimeDelay = (strcmp(params["ltd"].c_str(), "1") == 0);
     else
         lightTimeDelay = false;
 
-    if (params["fov"] != "")
+    if (params.count("fov") != 0)
     {
         if (sscanf(params["fov"].c_str(), "%f", &fieldOfView) != 1.0f)
             return false;
     }
 
-    if (params["ts"] != "")
+    if (params.count("ts") != 0)
     {
         if (sscanf(params["ts"].c_str(), "%f", &timeScale) != 1.0f)
             return false;
     }
 
     int paused = 0;
-    if (params["p"] != "")
+    if (params.count("p") != 0)
     {
         if (sscanf(params["p"].c_str(), "%d", &paused) != 1)
             return false;
@@ -139,12 +140,12 @@ bool CelestiaState::loadState(std::map<std::string, std::string> params)
     }
 
     // Render settings
-    if (params["rf"] != "")
+    if (params.count("rf") != 0)
     {
         if (sscanf(params["rf"].c_str(), "%d", &renderFlags) != 1)
             return false;
     }
-    if (params["lm"] != "")
+    if (params.count("lm") != 0)
     {
         if (sscanf(params["lm"].c_str(), "%d", &labelMode) != 1)
             return false;
@@ -153,33 +154,28 @@ bool CelestiaState::loadState(std::map<std::string, std::string> params)
 #endif
 
 
-Url::Url(std::string  str, CelestiaCore *core):
+Url::Url(std::string str, CelestiaCore *core):
     urlStr(std::move(str)),
     appCore(core)
 {
-    std::string::size_type pos, endPrevious;
-    std::vector<Selection> bodies;
-    Simulation *sim = appCore->getSimulation();
-    std::map<std::string, std::string> params = parseUrlParams(urlStr);
-
-    if (urlStr.substr(0, 6) != "cel://")
+    if (urlStr.compare(0, 6, "cel://") != 0)
     {
-        urlStr = "";
+        urlStr.clear();
+        return;
+    }
+
+    std::map<std::string, std::string> params = parseUrlParams(urlStr);
+    if (params.empty())
+    {
+        urlStr.clear();
         return;
     }
 
     // Version labelling of cel URLs was only added in Celestia 1.5, cel URL
     // version 2. Assume any URL without a version is version 1.
-    if (params["ver"] != "")
-    {
-        sscanf(params["ver"].c_str(), "%u", &version);
-    }
-    else
-    {
-        version = 1;
-    }
+    version = params.count("ver") == 0 ? 1 : (unsigned) stoi(params["ver"]);
 
-    pos = urlStr.find('/', 6);
+    auto pos = urlStr.find('/', 6);
     if (pos == std::string::npos)
         pos = urlStr.find('?', 6);
 
@@ -188,32 +184,32 @@ Url::Url(std::string  str, CelestiaCore *core):
     else
         modeStr = decodeString(urlStr.substr(6, pos - 6));
 
-    if (!compareIgnoringCase(modeStr, std::string("Freeflight")))
+    if (!compareIgnoringCase(modeStr, "Freeflight"))
     {
         mode = ObserverFrame::Universal;
         nbBodies = 0;
     }
-    else if (!compareIgnoringCase(modeStr, std::string("Follow")))
+    else if (!compareIgnoringCase(modeStr, "Follow"))
     {
         mode = ObserverFrame::Ecliptical;
         nbBodies = 1;
     }
-    else if (!compareIgnoringCase(modeStr, std::string("SyncOrbit")))
+    else if (!compareIgnoringCase(modeStr, "SyncOrbit"))
     {
         mode = ObserverFrame::BodyFixed;
         nbBodies = 1;
     }
-    else if (!compareIgnoringCase(modeStr, std::string("Chase")))
+    else if (!compareIgnoringCase(modeStr, "Chase"))
     {
         mode = ObserverFrame::Chase;
         nbBodies = 1;
     }
-    else if (!compareIgnoringCase(modeStr, std::string("PhaseLock")))
+    else if (!compareIgnoringCase(modeStr, "PhaseLock"))
     {
         mode = ObserverFrame::PhaseLock;
         nbBodies = 2;
     }
-    else if (!compareIgnoringCase(modeStr, std::string("Settings")))
+    else if (!compareIgnoringCase(modeStr, "Settings"))
     {
         type = Settings;
         nbBodies = 0;
@@ -221,27 +217,36 @@ Url::Url(std::string  str, CelestiaCore *core):
 
     if (nbBodies == -1)
     {
-        urlStr = "";
+        urlStr.clear();
         return; // Mode not recognized
     }
 
-    endPrevious = pos;
-    int nb = nbBodies, i=1;
-    while (nb != 0 && endPrevious != std::string::npos) {
-        std::string bodyName="";
+    auto endPrevious = pos;
+    int nb = nbBodies, i = 1;
+    std::vector<Selection> bodies;
+    auto *sim = appCore->getSimulation();
+
+    while (nb != 0 && endPrevious != std::string::npos)
+    {
+        std::string bodyName;
         pos = urlStr.find('/', endPrevious + 1);
-        if (pos == std::string::npos) pos = urlStr.find('?', endPrevious + 1);
-        if (pos == std::string::npos) bodyName = urlStr.substr(endPrevious + 1);
-        else bodyName = urlStr.substr(endPrevious + 1, pos - endPrevious - 1);
+        if (pos == std::string::npos)
+            pos = urlStr.find('?', endPrevious + 1);
+        if (pos == std::string::npos)
+            bodyName = urlStr.substr(endPrevious + 1);
+        else
+            bodyName = urlStr.substr(endPrevious + 1, pos - endPrevious - 1);
         endPrevious = pos;
 
         bodyName = decodeString(bodyName);
         pos = 0;
         if (i==1) body1 = bodyName;
         if (i==2) body2 = bodyName;
-        while(pos != std::string::npos) {
+        while (pos != std::string::npos)
+        {
             pos = bodyName.find(":", pos + 1);
-            if (pos != std::string::npos) bodyName[pos]='/';
+            if (pos != std::string::npos)
+                bodyName[pos] = '/';
         }
 
         bodies.push_back(sim->findObjectFromPath(bodyName));
@@ -250,36 +255,57 @@ Url::Url(std::string  str, CelestiaCore *core):
         i++;
     }
 
-    if (nb != 0) {
-        urlStr = "";
+    if (nb != 0)
+    {
+        urlStr.clear();
         return; // Number of bodies in Url doesn't match Mode
     }
 
-    if (nbBodies == 0) ref = ObserverFrame();
-    if (nbBodies == 1) ref = ObserverFrame(mode, bodies[0]);
-    if (nbBodies == 2) ref = ObserverFrame(mode, bodies[0], bodies[1]);
+    switch (nbBodies)
+    {
+    case 0:
+        ref = ObserverFrame();
+        break;
+    case 1:
+        ref = ObserverFrame(mode, bodies[0]);
+        break;
+    case 2:
+        ref = ObserverFrame(mode, bodies[0], bodies[1]);
+        break;
+    default:
+        break;
+    }
     fromString = true;
 
-    std::string time="";
+    std::string time;
     pos = urlStr.find('?', endPrevious + 1);
     if (pos == std::string::npos)
         time = urlStr.substr(endPrevious + 1);
-    else time = urlStr.substr(endPrevious + 1, pos - endPrevious -1);
-        time = decodeString(time);
+    else
+        time = urlStr.substr(endPrevious + 1, pos - endPrevious -1);
+    time = decodeString(time);
 
-    switch (version)
+    try
     {
-    case 1:
-    case 2:
-        initVersion2(params, time);
-        break;
-    case 3:
-    case 4:
-        // Version 4 has only render flags defined as uint64_t
-        initVersion3(params, time);
-        break;
-    default:
-        urlStr = "";
+        switch (version)
+        {
+        case 1:
+        case 2:
+            initVersion2(params, time);
+            break;
+        case 3:
+        case 4:
+            // Version 4 has only render flags defined as uint64_t
+            initVersion3(params, time);
+            break;
+        default:
+            urlStr.clear();
+            return;
+        }
+    }
+    catch (...)
+    {
+        urlStr.clear();
         return;
     }
 
@@ -469,7 +495,7 @@ void Url::initVersion2(std::map<std::string, std::string>& params,
 {
     if (type != Settings)
     {
-        if (params["dist"] != "")
+        if (params.count("dist") != 0)
             type = Relative;
         else
             type = Absolute;
@@ -487,63 +513,46 @@ void Url::initVersion2(std::map<std::string, std::string>& params,
                                    BigFix(params["z"]));
 
             float ow, ox, oy, oz;
-            sscanf(params["ow"].c_str(), "%f", &ow);
-            sscanf(params["ox"].c_str(), "%f", &ox);
-            sscanf(params["oy"].c_str(), "%f", &oy);
-            sscanf(params["oz"].c_str(), "%f", &oz);
+            ow = stof(params["ow"]);
+            ox = stof(params["ox"]);
+            oy = stof(params["oy"]);
+            oz = stof(params["oz"]);
 
             orientation = Quaternionf(ow, ox, oy, oz);
 
             // Intentional Fall-Through
         case Relative:
-            if (params["dist"] != "") {
-                sscanf(params["dist"].c_str(), "%lf", &distance);
-            }
-            if (params["long"] != "") {
-                sscanf(params["long"].c_str(), "%lf", &longitude);
-            }
-            if (params["lat"] != "") {
-                sscanf(params["lat"].c_str(), "%lf", &latitude);
-            }
-            if (params["select"] != "") {
+            if (params.count("dist") != 0)
+                distance = stof(params["dist"]);
+            if (params.count("long") != 0)
+                longitude = stof(params["long"]);
+            if (params.count("lat") != 0)
+                latitude = stof(params["lat"]);
+            if (params.count("select") != 0)
                 selectedStr = params["select"];
-            }
-            if (params["track"] != "") {
+            if (params.count("track") != 0)
                 trackedStr = params["track"];
-            }
-            if (params["ltd"] != "") {
-                lightTimeDelay = (strcmp(params["ltd"].c_str(), "1") == 0);
-            } else {
-                lightTimeDelay = false;
-            }
-            if (params["fov"] != "") {
-                sscanf(params["fov"].c_str(), "%f", &fieldOfView);
-            }
-            if (params["ts"] != "") {
-                sscanf(params["ts"].c_str(), "%f", &timeScale);
-            }
-            if (params["p"] != "") {
-                int pauseInt = 0;
-                sscanf(params["p"].c_str(), "%d", &pauseInt);
-                pauseState = pauseInt == 1;
-            }
+            if (params.count("fov") != 0)
+                fieldOfView = stof(params["fov"]);
+            if (params.count("ts") != 0)
+                timeScale = stof(params["ts"]);
+
+            lightTimeDelay = params.count("ltd") != 0 && params["ltd"] == "1";
+            pauseState = params.count("p") != 0 && stoi(params["p"]) == 1;
             break;
         case Settings:
             break;
     }
 
-    if (params["rf"] != "") {
-        int rf;
-        sscanf(params["rf"].c_str(), "%d", &rf);
-        renderFlags = (uint64_t) rf;
+    if (params.count("rf") != 0)
+    {
+        renderFlags = static_cast<uint64_t>(stoi(params["rf"]));
         // older celestia versions didn't know about new renderer flags
         if ((renderFlags & Renderer::ShowPlanets) != 0)
             renderFlags |= NewRenderFlags;
     }
-    if (params["lm"] != "") {
-        sscanf(params["lm"].c_str(), "%d", &labelMode);
-    }
-
+    if (params.count("lm") != 0)
+        labelMode = stoi(params["lm"]);
 }
 
 
@@ -564,55 +573,51 @@ void Url::initVersion3(std::map<std::string, std::string>& params,
                            BigFix(params["z"]));
 
     float ow, ox, oy, oz;
-    sscanf(params["ow"].c_str(), "%f", &ow);
-    sscanf(params["ox"].c_str(), "%f", &ox);
-    sscanf(params["oy"].c_str(), "%f", &oy);
-    sscanf(params["oz"].c_str(), "%f", &oz);
+    ow = stof(params["ow"]);
+    ox = stof(params["ox"]);
+    oy = stof(params["oy"]);
+    oz = stof(params["oz"]);
 
     orientation = Quaternionf(ow, ox, oy, oz);
 
-    if (params["select"] != "")
+    if (params.count("select") != 0)
         selectedStr = params["select"];
-    if (params["track"] != "")
+    if (params.count("track") != 0)
         trackedStr = params["track"];
-    if (params["ltd"] != "")
-        lightTimeDelay = (strcmp(params["ltd"].c_str(), "1") == 0);
+    if (params.count("ltd") != 0)
+        lightTimeDelay = params["ltd"] == "1";
     else
         lightTimeDelay = false;
 
-    if (params["fov"] != "")
-        sscanf(params["fov"].c_str(), "%f", &fieldOfView);
-    if (params["ts"] != "")
-        sscanf(params["ts"].c_str(), "%f", &timeScale);
+    if (params.count("fov") != 0)
+        fieldOfView = stof(params["fov"]);
+    if (params.count("ts") != 0)
+        timeScale = stof(params["ts"]);
 
-    int paused = 0;
-    if (params["p"] != "")
-        sscanf(params["p"].c_str(), "%d", &paused);
-    pauseState = paused == 1;
+    pauseState = params.count("p") != 0 && stoi(params["p"]) == 1;
 
     // Render settings
-    if (params["rf"] != "")
+    if (params.count("rf") != 0)
     {
         if (version == 4)
         {
-            sscanf(params["rf"].c_str(), "%I64u", &renderFlags);
+            renderFlags = static_cast<uint64_t>(stoull(params["rf"]));
         }
         else
         {
-            int rf;
-            sscanf(params["rf"].c_str(), "%d", &rf);
-            renderFlags = (uint64_t) rf;
+            // old renderer flags are int
+            renderFlags = static_cast<uint64_t>(stoi(params["rf"]));
             // older celestia versions didn't know about new renderer flags
             if ((renderFlags & Renderer::ShowPlanets) != 0)
                 renderFlags |= NewRenderFlags;
         }
     }
-    if (params["lm"] != "")
-        sscanf(params["lm"].c_str(), "%d", &labelMode);
+    if (params.count("lm") != 0)
+        labelMode = stoi(params["lm"]);
 
     int timeSourceInt = 0;
-    if (params["tsrc"] != "")
-        sscanf(params["tsrc"].c_str(), "%d", &timeSourceInt);
+    if (params.count("tsrc") != 0)
+        timeSourceInt = stoi(params["tsrc"]);
     if (timeSourceInt >= 0 && timeSourceInt < TimeSourceCount)
         timeSource = (TimeSource) timeSourceInt;
     else
@@ -749,19 +754,19 @@ static std::string getBodyName(Universe* universe, Body* body)
 }
 
 
-void Url::goTo()
+bool Url::goTo()
 {
-    Selection sel;
+    if (urlStr.empty())
+        return false;
 
-    if (urlStr == "")
-        return;
     Simulation *sim = appCore->getSimulation();
     Renderer *renderer = appCore->getRenderer();
     std::string::size_type pos;
 
     sim->update(0.0);
 
-    switch(type) {
+    switch(type)
+    {
     case Absolute:// Intentional Fall-Through
     case Relative:
         sim->setFrame(ref.getCoordinateSystem(), ref.getRefObject(), ref.getTargetObject());
@@ -771,15 +776,15 @@ void Url::goTo()
         sim->setPauseState(pauseState);
         appCore->setLightDelayActive(lightTimeDelay);
 
-        if (selectedStr != "")
+        if (!selectedStr.empty())
         {
             pos = 0;
-            while(pos != std::string::npos)
+            while (pos != std::string::npos)
             {
                 pos = selectedStr.find(":", pos + 1);
-                if (pos != std::string::npos) selectedStr[pos]='/';
+                if (pos != std::string::npos) selectedStr[pos] = '/';
             }
-            sel = sim->findObjectFromPath(selectedStr);
+            auto sel = sim->findObjectFromPath(selectedStr);
             sim->setSelection(sel);
         }
         else
@@ -787,15 +792,15 @@ void Url::goTo()
             sim->setSelection(Selection());
         }
 
-        if (trackedStr != "")
+        if (!trackedStr.empty())
         {
             pos = 0;
-            while(pos != std::string::npos)
+            while (pos != std::string::npos)
             {
                 pos = trackedStr.find(":", pos + 1);
-                if (pos != std::string::npos) trackedStr[pos]='/';
+                if (pos != std::string::npos) trackedStr[pos] = '/';
             }
-            sel = sim->findObjectFromPath(trackedStr);
+            auto sel = sim->findObjectFromPath(trackedStr);
             sim->setTrackedObject(sel);
         }
         else
@@ -837,7 +842,8 @@ void Url::goTo()
     }
     else
     {
-        switch(type) {
+        switch(type)
+        {
         case Absolute:
             sim->setTime((double) date);
             sim->setObserverPosition(coord);
@@ -850,6 +856,7 @@ void Url::goTo()
             break;
         }
     }
+    return true;
 }
 
 

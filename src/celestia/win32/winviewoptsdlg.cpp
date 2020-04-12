@@ -12,7 +12,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include "winviewoptsdlg.h"
-#include "celengine\render.h"
+#include "celengine/render.h"
 
 #include "res/resource.h"
 
@@ -107,6 +107,12 @@ static BOOL APIENTRY ViewOptionsProc(HWND hDlg,
         case IDC_SHOWORBITS:
             renderer->setRenderFlags(renderFlags ^ Renderer::ShowOrbits);
             break;
+        case IDC_SHOWPARTIALTRAJECTORIES:
+            renderer->setRenderFlags(renderFlags ^ Renderer::ShowPartialTrajectories);
+            break;
+        case IDC_SHOWFADINGORBITS:
+            renderer->setRenderFlags(renderFlags ^ Renderer::ShowFadingOrbits);
+            break;
         case IDC_PLANETORBITS:
             renderer->setOrbitMask(orbitMask ^ Body::Planet);
             break;
@@ -160,6 +166,9 @@ static BOOL APIENTRY ViewOptionsProc(HWND hDlg,
             break;
         case IDC_SHOWRINGSHADOWS:
             renderer->setRenderFlags(renderFlags ^ Renderer::ShowRingShadows);
+            break;
+        case IDC_SHOWRINGS:
+            renderer->setRenderFlags(renderFlags ^ Renderer::ShowPlanetRings);
             break;
         case IDC_SHOWCOMETTAILS:
             renderer->setRenderFlags(renderFlags ^ Renderer::ShowCometTails);
@@ -309,6 +318,11 @@ static void dlgCheck(HWND hDlg, WORD item, uint32_t flags, uint32_t f)
                        ((flags & f) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
 }
 
+static void dlgCheck64(HWND hDlg, WORD item, uint64_t flags, uint64_t f)
+{
+    SendDlgItemMessage(hDlg, item, BM_SETCHECK,
+                       ((flags & f) != 0) ? BST_CHECKED : BST_UNCHECKED, 0);
+}
 
 void ViewOptionsDialog::SetControls(HWND hDlg)
 {
@@ -348,8 +362,9 @@ void ViewOptionsDialog::SetControls(HWND hDlg)
         (renderFlags & Renderer::ShowOpenClusters)? BST_CHECKED:BST_UNCHECKED, 0);
     SendDlgItemMessage(hDlg, IDC_SHOWNIGHTSIDELIGHTS, BM_SETCHECK,
         (renderFlags & Renderer::ShowNightMaps)? BST_CHECKED:BST_UNCHECKED, 0);
-    SendDlgItemMessage(hDlg, IDC_SHOWORBITS, BM_SETCHECK,
-        (renderFlags & Renderer::ShowOrbits) != 0 ? BST_CHECKED : BST_UNCHECKED, 0);
+    dlgCheck64(hDlg, IDC_SHOWORBITS,       renderFlags, Renderer::ShowOrbits);
+    dlgCheck64(hDlg, IDC_SHOWFADINGORBITS, renderFlags, Renderer::ShowFadingOrbits);
+    dlgCheck64(hDlg, IDC_SHOWPARTIALTRAJECTORIES, renderFlags, Renderer::ShowPartialTrajectories);
     dlgCheck(hDlg, IDC_PLANETORBITS,     orbitMask,   Body::Planet);
     dlgCheck(hDlg, IDC_DWARFPLANETORBITS,orbitMask,   Body::DwarfPlanet);
     dlgCheck(hDlg, IDC_MOONORBITS,       orbitMask,   Body::Moon);
@@ -378,6 +393,8 @@ void ViewOptionsDialog::SetControls(HWND hDlg)
         (renderFlags & Renderer::ShowBoundaries)? BST_CHECKED:BST_UNCHECKED, 0);
     SendDlgItemMessage(hDlg, IDC_SHOWRINGSHADOWS, BM_SETCHECK,
         (renderFlags & Renderer::ShowRingShadows)? BST_CHECKED:BST_UNCHECKED, 0);
+    SendDlgItemMessage(hDlg, IDC_SHOWRINGS, BM_SETCHECK,
+        (renderFlags & Renderer::ShowPlanetRings)? BST_CHECKED:BST_UNCHECKED, 0);
     SendDlgItemMessage(hDlg, IDC_SHOWCOMETTAILS, BM_SETCHECK,
         (renderFlags & Renderer::ShowCometTails)? BST_CHECKED:BST_UNCHECKED, 0);
     SendDlgItemMessage(hDlg, IDC_SHOWMARKERS, BM_SETCHECK,

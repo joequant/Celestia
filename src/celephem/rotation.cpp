@@ -18,6 +18,7 @@
 
 using namespace Eigen;
 using namespace std;
+using namespace celmath;
 
 
 static const double ANGULAR_VELOCITY_DIFF_DELTA = 1.0 / 1440.0;
@@ -49,11 +50,6 @@ RotationModel::angularVelocityAtTime(double tdb) const
         return Vector3d::Zero();
 
     return dq.vec().normalized() * (2.0 * acos(dq.w()) / dt);
-#ifdef CELVEC
-    Vector3d v(dq.x, dq.y, dq.z);
-    v.normalize();
-    return v * (2.0 * acos(dq.w) / dt);
-#endif
 }
 
 
@@ -148,11 +144,6 @@ CachingRotationModel::computeAngularVelocity(double tjd) const
         return Vector3d::Zero();
 
     return dq.vec().normalized() * (2.0 * acos(dq.w()) / dt);
-#ifdef CELVEC
-    Vec3d v(dq.x, dq.y, dq.z);
-    v.normalize();
-    return v * (2.0 * acos(dq.w) / dt);
-#endif
 }
 
 

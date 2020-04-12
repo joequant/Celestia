@@ -15,17 +15,19 @@
 #include <vector>
 #include <iostream>
 #include <celutil/color.h>
-#include "stardb.h"
-#include "shadermanager.h"
 
-class Renderer;
-class AsterismList;
+class StarDatabase;
 
 class Asterism
 {
  public:
     Asterism(std::string);
     ~Asterism() = default;
+    Asterism() = delete;
+    Asterism(const Asterism&) = delete;
+    Asterism(Asterism&&) = delete;
+    Asterism& operator=(const Asterism&) = delete;
+    Asterism& operator=(Asterism&&) = delete;
 
     typedef std::vector<Eigen::Vector3f> Chain;
 
@@ -37,7 +39,7 @@ class Asterism
     void setActive(bool _active);
 
     Color getOverrideColor() const;
-    void setOverrideColor(Color c);
+    void setOverrideColor(const Color &c);
     void unsetOverrideColor();
     bool isColorOverridden() const;
 
@@ -47,37 +49,14 @@ class Asterism
     std::string name;
     std::string i18nName;
     std::vector<Chain*> chains;
-
-    // total number of vertexes in the asterism
-    uint16_t vertex_count{ 0 };
-
-    bool active{ true };
-    bool useOverrideColor{ false };
     Color color;
 
-    friend class AsterismList;
+    bool active             { true };
+    bool useOverrideColor   { false };
 };
 
-class AsterismList : public std::vector<Asterism*>
-{
- public:
-    void render(const Color& color, const Renderer& renderer);
-
- private:
-    void cleanup();
-    void prepare();
-
-    GLuint  vboId{ 0 };
-    GLfloat *vtx_buf{ nullptr };
-    GLsizei vtx_num{ 0 };
-    bool prepared{ false };
-
-    ShaderProperties shadprop;
-};
+typedef std::vector<Asterism*> AsterismList;
 
 AsterismList* ReadAsterismList(std::istream&, const StarDatabase&);
 
 #endif // _CELENGINE_ASTERISM_H_
-
-
-

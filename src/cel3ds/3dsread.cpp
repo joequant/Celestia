@@ -300,12 +300,6 @@ Matrix4f readMeshMatrix(ifstream& in/*, int nBytes*/)
          m30, m31, m32, 1;
 
     return m;
-#ifdef CELVEC
-    return Mat4f(Vec4f(m00, m01, m02, 0),
-                 Vec4f(m10, m11, m12, 0),
-                 Vec4f(m20, m21, m22, 0),
-                 Vec4f(m30, m31, m32, 1));
-#endif
 }
 
 
@@ -626,18 +620,18 @@ M3DScene* Read3DSFile(ifstream& in)
     unsigned short chunkType = readUshort(in);
     if (chunkType != M3DCHUNK_MAGIC)
     {
-        DPRINTF(0, "Read3DSFile: Wrong magic number in header\n");
+        DPRINTF(LOG_LEVEL_ERROR, "Read3DSFile: Wrong magic number in header\n");
         return nullptr;
     }
 
    int32_t chunkSize = readInt(in);
     if (in.bad())
     {
-        DPRINTF(0, "Read3DSFile: Error reading 3DS file.\n");
+        DPRINTF(LOG_LEVEL_ERROR, "Read3DSFile: Error reading 3DS file.\n");
         return nullptr;
     }
 
-    DPRINTF(1, "3DS file, %d bytes\n", chunkSize);
+    DPRINTF(LOG_LEVEL_INFO, "3DS file, %d bytes\n", chunkSize);
 
     auto* scene = new M3DScene();
     int contentSize = chunkSize - 6;
@@ -648,12 +642,12 @@ M3DScene* Read3DSFile(ifstream& in)
 }
 
 
-M3DScene* Read3DSFile(const string& filename)
+M3DScene* Read3DSFile(const fs::path& filename)
 {
-    ifstream in(filename, ios::in | ios::binary);
+    ifstream in(filename.string(), ios::in | ios::binary);
     if (!in.good())
     {
-        DPRINTF(0, "Read3DSFile: Error opening %s\n", filename.c_str());
+        DPRINTF(LOG_LEVEL_ERROR, "Read3DSFile: Error opening %s\n", filename);
         return nullptr;
     }
 

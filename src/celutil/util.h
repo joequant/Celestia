@@ -15,67 +15,38 @@
 #include <string>
 #include <iostream>
 #include <functional>
-
-// gettext / libintl setup
-#ifndef _ /* unless somebody already took care of this */
-#define _(string) gettext (string)
-#endif
-#ifndef gettext_noop
-#define gettext_noop(string) string
-#endif
-
-#ifdef _WIN32
-
-#include "libintl.h"
-
-// POSIX provides an extension to printf family to reorder their arguments,
-// so GNU GetText provides own replacement for them on windows platform
-#ifdef fprintf
-#undef fprintf
-#endif
-#ifdef printf
-#undef printf
-#endif
-#ifdef sprintf
-#undef sprintf
-#endif
-
-#elif defined(TARGET_OS_MAC)
-
-#ifndef gettext
-#include "POSupport.h"
-#define gettext(s)      localizedUTF8String(s)
-#define dgettext(d,s)   localizedUTF8StringWithDomain(d,s)
-#endif
-
-#else
-
-#include <libintl.h>
-
-#endif
+#include <celcompat/filesystem.h>
 
 extern int compareIgnoringCase(const std::string& s1, const std::string& s2);
 extern int compareIgnoringCase(const std::string& s1, const std::string& s2, int n);
-extern std::string LocaleFilename(const std::string & filename);
+extern fs::path LocaleFilename(const fs::path& filename);
 
-class CompareIgnoringCasePredicate : public std::binary_function<std::string, std::string, bool>
+struct CompareIgnoringCasePredicate
 {
- public:
     bool operator()(const std::string&, const std::string&) const;
 };
 
-template <class T> struct printlineFunc : public std::unary_function<T, void>
+template <class T> struct printlineFunc
 {
     printlineFunc(std::ostream& o) : out(o) {};
     void operator() (T x) { out << x << '\n'; };
     std::ostream& out;
 };
 
-template <class T> struct deleteFunc : public std::unary_function<T, void>
+template <class T> struct deleteFunc
 {
-    deleteFunc() {};
     void operator() (T x) { delete x; };
-    int dummy;
 };
+
+// size in bytes of memory required to store a container data
+template<typename T> constexpr typename T::size_type memsize(const T &c)
+{
+    return c.size() * sizeof(typename T::value_type);
+}
+
+fs::path PathExp(const fs::path& filename);
+fs::path homeDir();
+
+bool GetTZInfo(std::string&, int&);
 
 #endif // _CELUTIL_UTIL_H_

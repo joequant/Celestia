@@ -3,7 +3,9 @@
 #include <cmath>
 #include <cstdio>
 
+#ifdef _WIN32
 #include <io.h>
+#endif
 #include <fcntl.h>
 
 #include <celmath/vecmath.h>
@@ -15,7 +17,7 @@ using namespace std;
 static int latSamples = 1440;
 static int longSamples = 2880;
 
-const float pi = 3.14159265;
+constexpr float pi = 3.14159265f;
 
 static float* samples = nullptr;
 

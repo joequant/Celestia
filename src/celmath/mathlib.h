@@ -12,151 +12,152 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <Eigen/Core>
 
 #define PI 3.14159265358979323846
 
-#define CONSTEXPR /**/
-
-// TODO: All of the functions in the 'Math' class should be
-// moved to the celmath namespace.
 namespace celmath
 {
-    /** Return the natural logarithm of 2 */
-    template<class T> CONSTEXPR T Ln2()
-    {
-        return (T) 0.693147180559945;
-    }
-
-    /** Return the log base 2 of the argument. */
-    template<class T> T log2(T x)
-    {
-        return std::log(x) / Ln2<T>();
-    }
+template<typename T> inline void sincos(T angle, T& s, T& c)
+{
+    s = sin(angle);
+    c = cos(angle);
 }
 
-
-template<class T> class Math
+// return a random float in [0, 1]
+template<typename T> inline T frand()
 {
-public:
-    static inline void sincos(T, T&, T&);
-    static inline T frand();
-    static inline T sfrand();
-    static inline T lerp(T t, T a, T b);
-    static inline T clamp(T t);
+    return (T) (rand() & 0x7fff) / (T) 32767;
+}
 
-private:
-    // This class is static and should not be instantiated
-    Math() {};
-};
+// return a random float in [-1, 1]
+template<typename T> inline T sfrand()
+{
+    return (T) (rand() & 0x7fff) / (T) 32767 * 2 - 1;
+}
 
+#ifndef HAVE_LERP
+template<typename T> constexpr T lerp(T t, T a, T b)
+{
+    return a + t * (b - a);
+}
+#endif
 
-typedef Math<float> Mathf;
-typedef Math<double> Mathd;
+// return t clamped to [0, 1]
+template<typename T> constexpr T clamp(T t)
+{
+    return (t < 0) ? 0 : ((t > 1) ? 1 : t);
+}
 
+#if __cplusplus < 201703L
+// return t clamped to [low, high]
+template<typename T> constexpr T clamp(T t, T low, T high)
+{
+    return (t < low) ? low : ((t > high) ? high : t);
+}
+#endif
 
-template<class T> CONSTEXPR T degToRad(T d)
+template<typename T> inline constexpr T degToRad(T d)
 {
     return d / 180 * static_cast<T>(PI);
 }
 
-template<class T> CONSTEXPR T radToDeg(T r)
+template<typename T> inline constexpr T radToDeg(T r)
 {
     return r * 180 / static_cast<T>(PI);
 }
 
-template<class T> CONSTEXPR T abs(T x)
-{
-    return (x < 0) ? -x : x;
-}
-
-template<class T> CONSTEXPR T square(T x)
+template<typename T> inline constexpr T square(T x)
 {
     return x * x;
 }
 
-template<class T> CONSTEXPR T cube(T x)
+template<typename T> inline constexpr T cube(T x)
 {
     return x * x * x;
 }
 
-template<class T> CONSTEXPR T clamp(T x)
+template<typename T> inline constexpr T sign(T x)
 {
-    if (x < 0)
-        return 0;
-    else if (x > 1)
-        return 1;
-    else
-        return x;
-}
-
-template<class T> CONSTEXPR T sign(T x)
-{
-    if (x < 0)
-        return -1;
-    else if (x > 0)
-        return 1;
-    else
-        return 0;
+    return (x < 0) ? -1 : ((x > 0) ? 1 : 0);
 }
 
 // This function is like fmod except that it always returns
 // a positive value in the range [ 0, y )
-template<class T> T pfmod(T x, T y)
+template<typename T> T pfmod(T x, T y)
 {
-    T quotient = std::floor(std::abs(x / y));
+    T quotient = floor(abs(x / y));
     if (x < 0.0)
         return x + (quotient + 1) * y;
     else
         return x - quotient * y;
 }
 
-template<class T> CONSTEXPR T circleArea(T r)
+template<typename T> inline constexpr T circleArea(T r)
 {
-    return (T) PI * r * r;
+    return static_cast<T>(PI) * r * r;
 }
 
-template<class T> CONSTEXPR T sphereArea(T r)
+template<typename T> inline constexpr T sphereArea(T r)
 {
-    return 4 * (T) PI * r * r;
+    return 4 * static_cast<T>(PI) * r * r;
 }
 
-template<class T> void Math<T>::sincos(T angle, T& s, T& c)
+template <typename T> static Eigen::Matrix<T, 3, 1>
+ellipsoidTangent(const Eigen::Matrix<T, 3, 1>& recipSemiAxes,
+                 const Eigen::Matrix<T, 3, 1>& w,
+                 const Eigen::Matrix<T, 3, 1>& e,
+                 const Eigen::Matrix<T, 3, 1>& e_,
+                 T ee)
 {
-    s = (T) sin(angle);
-    c = (T) cos(angle);
+    // We want to find t such that -E(1-t) + Wt is the direction of a ray
+    // tangent to the ellipsoid.  A tangent ray will intersect the ellipsoid
+    // at exactly one point.  Finding the intersection between a ray and an
+    // ellipsoid ultimately requires using the quadratic formula, which has
+    // one solution when the discriminant (b^2 - 4ac) is zero.  The code below
+    // computes the value of t that results in a discriminant of zero.
+    Eigen::Matrix<T, 3, 1> w_ = w.cwiseProduct(recipSemiAxes);
+    T ww = w_.dot(w_);
+    T ew = w_.dot(e_);
+
+    // Before elimination of terms:
+    // double a =  4 * square(ee + ew) - 4 * (ee + 2 * ew + ww) * (ee - 1.0f);
+    // double b = -8 * ee * (ee + ew)  - 4 * (-2 * (ee + ew) * (ee - 1.0f));
+    // double c =  4 * ee * ee         - 4 * (ee * (ee - 1.0f));
+
+    // Simplify the below expression and eliminate the ee^2 terms; this
+    // prevents precision errors, as ee tends to be a very large value.
+    //T a =  4 * square(ee + ew) - 4 * (ee + 2 * ew + ww) * (ee - 1);
+    T a =  4 * (square(ew) - ee * ww + ee + 2 * ew + ww);
+    T b = -8 * (ee + ew);
+    T c =  4 * ee;
+
+    T t = 0;
+    T discriminant = b * b - 4 * a * c;
+
+    if (discriminant < 0)
+        discriminant = -discriminant; // Bad!
+
+    t = (-b + (T) sqrt(discriminant)) / (2 * a);
+
+    // V is the direction vector.  We now need the point of intersection,
+    // which we obtain by solving the quadratic equation for the ray-ellipse
+    // intersection.  Since we already know that the discriminant is zero,
+    // the solution is just -b/2a
+    Eigen::Matrix<T, 3, 1> v = -e * (1 - t) + w * t;
+    Eigen::Matrix<T, 3, 1> v_ = v.cwiseProduct(recipSemiAxes);
+    T a1 = v_.dot(v_);
+    T b1 = (T) 2 * v_.dot(e_);
+    T t1 = -b1 / (2 * a1);
+
+    return e + v * t1;
 }
+}; // namespace celmath
 
-
-// return a random float in [0, 1]
-template<class T> T Math<T>::frand()
+#if __cplusplus < 201703L
+namespace std
 {
-    return (T) (rand() & 0x7fff) / (T) 32767;
-}
-
-
-// return a random float in [-1, 1]
-template<class T> T Math<T>::sfrand()
-{
-    return (T) (rand() & 0x7fff) / (T) 32767 * 2 - 1;
-}
-
-
-template<class T> T Math<T>::lerp(T t, T a, T b)
-{
-    return a + t * (b - a);
-}
-
-
-// return t clamped to [0, 1]
-template<class T> T Math<T>::clamp(T t)
-{
-    if (t < 0)
-        return 0;
-    else if (t > 1)
-        return 1;
-    else
-        return t;
-}
-
-
+    using celmath::clamp;
+};
+#endif
 #endif // _MATHLIB_H_

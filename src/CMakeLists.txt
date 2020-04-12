@@ -1,19 +1,28 @@
 set(CELESTIA_LIBS
   cel3ds
   celengine
-  celephem
   celestia
   celmath
   celmodel
-  celtxf
   celutil
 )
 
-foreach(lib ${CELESTIA_LIBS} tools)
+foreach(lib ${CELESTIA_LIBS})
   add_subdirectory(${lib})
 endforeach()
 
-if (NOT WIN32)
-  add_executable(buildstardb buildstardb.cpp)
-  cotire(buildstardb)
+add_subdirectory(celscript)
+
+# These compiled objects are merged with the celengine library
+add_subdirectory(celephem)
+add_subdirectory(celcompat)
+
+if (ENABLE_TTF)
+  add_subdirectory(celttf)
+else()
+  add_subdirectory(celtxf)
+endif()
+
+if (ENABLE_TOOLS)
+  add_subdirectory(tools)
 endif()
